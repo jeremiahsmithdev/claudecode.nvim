@@ -104,6 +104,13 @@ function M.open(cmd_string, env_table, effective_config, focus)
     return
   end
 
+  -- Check if claude is already connected from any source (manual or automatic)
+  local claudecode = require("claudecode")
+  if claudecode.is_claude_connected() then
+    logger.debug("terminal", "Claude is already connected - not creating new tmux pane")
+    return
+  end
+
   if get_active_pane_id() then
     logger.debug("terminal", "Claude tmux pane already exists, focusing existing pane")
     if focus ~= false then
@@ -146,6 +153,12 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
   if pane_id then
     M.close()
   else
+    -- Check if claude is already connected from any source before creating new pane
+    local claudecode = require("claudecode")
+    if claudecode.is_claude_connected() then
+      logger.debug("terminal", "Claude is already connected - not toggling new tmux pane")
+      return
+    end
     M.open(cmd_string, env_table, effective_config, true)
   end
 end
@@ -153,6 +166,12 @@ end
 function M.focus_toggle(cmd_string, env_table, effective_config)
   local pane_id = get_active_pane_id()
   if not pane_id then
+    -- Check if claude is already connected from any source before creating new pane
+    local claudecode = require("claudecode")
+    if claudecode.is_claude_connected() then
+      logger.debug("terminal", "Claude is already connected - not creating new tmux pane for focus toggle")
+      return
+    end
     M.open(cmd_string, env_table, effective_config, true)
     return
   end
