@@ -47,13 +47,7 @@ local function build_split_command(cmd_string, env_table, effective_config)
     split_cmd = split_cmd .. " -l " .. split_size
   end
 
-  -- Add environment variables
-  if env_table then
-    for key, value in pairs(env_table) do
-      split_cmd = split_cmd .. " -e '" .. key .. "=" .. value .. "'"
-    end
-  end
-
+  -- Just run the command directly - let tmux inherit the full environment naturally
   split_cmd = split_cmd .. " '" .. cmd_string .. "'"
 
   return split_cmd
@@ -81,6 +75,7 @@ local function get_active_pane_id()
 end
 
 local function capture_new_pane_id(split_cmd)
+  -- Create the pane and get its ID
   local full_cmd = split_cmd .. " \\; display-message -p '#{pane_id}'"
   local handle = io.popen(full_cmd)
   if not handle then
@@ -118,7 +113,8 @@ function M.open(cmd_string, env_table, effective_config, focus)
   end
 
   local split_cmd = build_split_command(cmd_string, env_table, effective_config)
-  logger.debug("terminal", "Opening tmux pane with command: " .. split_cmd)
+  logger.info("terminal", "Creating tmux pane with command: " .. split_cmd)
+  logger.info("terminal", "Running claude with inherited tmux environment (no exports)")
 
   local new_pane_id = capture_new_pane_id(split_cmd)
   if new_pane_id then
@@ -193,6 +189,63 @@ function M._get_terminal_for_test()
     pane_id = active_pane_id,
     is_in_tmux = is_in_tmux(),
   }
+end
+
+--- Debug function to test tmux pane environment vs manual pane
+function M.test_environment()
+  if not is_in_tmux() then
+    logger.error("terminal", "Not in tmux session")
+    return
+  end
+
+  -- Create a simple pane that just shows the environment
+  local test_cmd =
+    "echo '=== ENVIRONMENT TEST ==='; echo 'SHELL='$SHELL; echo 'PATH (first 100 chars):'$PATH | head -c 100; echo; which claude; echo 'Claude location:' $?; env | grep -E '(CLAUDE|IDE|NVIM)'; echo '=== END TEST ==='; read -p 'Press Enter to close...'"
+
+  -- Create pane with test command directly
+  local split_cmd = "tmux split-window -h '" .. test_cmd .. "'"
+
+  logger.info("terminal", "Creating test pane: " .. split_cmd)
+
+  local new_pane_id = capture_new_pane_id(split_cmd)
+  if new_pane_id then
+    logger.info("terminal", "Test pane created with ID: " .. new_pane_id)
+  end
+end
+
+--- Debug what environment differences exist between manual and automated
+function M.debug_environment_difference()
+  if not is_in_tmux() then
+    logger.error("terminal", "Not in tmux session")
+    return
+  end
+
+  logger.info("terminal", "Creating environment comparison panes...")
+
+  -- Test what a normal shell pane gets
+  local manual_test =
+    "echo '=== MANUAL PANE ENVIRONMENT ==='; which claude; echo 'PATH length:' ${#PATH}; echo 'Shell:' $SHELL; echo 'Key vars:'; env | grep -E '(PATH|SHELL|HOME|LANG)' | head -5; echo 'Press Enter...'; read"
+  local manual_split = "tmux split-window -h '" .. manual_test .. "'"
+
+  -- Test our current approach
+  local auto_test =
+    "echo '=== AUTOMATED PANE ENVIRONMENT ==='; which claude; echo 'PATH length:' ${#PATH}; echo 'Shell:' $SHELL; echo 'Key vars:'; env | grep -E '(PATH|SHELL|HOME|LANG)' | head -5; echo 'Claude vars:'; env | grep CLAUDE; echo 'Press Enter...'; read"
+  local env_table = {
+    ENABLE_IDE_INTEGRATION = "true",
+    FORCE_CODE_TERMINAL = "true",
+    CLAUDE_CODE_SSE_PORT = "12345",
+  }
+  local config = { split_side = "right", split_width_percentage = 0.3 }
+  local auto_split = build_split_command(auto_test, env_table, config)
+
+  logger.info("terminal", "Manual pane command: " .. manual_split)
+  logger.info("terminal", "Auto pane command: " .. auto_split)
+
+  -- Create both panes
+  capture_new_pane_id(manual_split)
+  vim.defer_fn(function()
+    capture_new_pane_id(auto_split)
+  end, 1000)
 end
 
 return M
