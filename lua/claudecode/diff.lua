@@ -764,7 +764,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- Use the actual buffer the user interacts with (important for unified mode)
     local buffer_for_autocmds = diff_info.new_buffer or new_buffer
     local autocmd_ids = register_diff_autocmds(tab_name, buffer_for_autocmds)
-    
+
     -- Clean up original scratch buffer if unified mode created a different buffer
     if diff_info.new_buffer and diff_info.new_buffer ~= new_buffer then
       pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })

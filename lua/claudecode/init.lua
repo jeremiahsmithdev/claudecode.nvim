@@ -36,6 +36,7 @@ M.version = {
 --- @field port_range {min: integer, max: integer} Port range for WebSocket server.
 --- @field auto_start boolean Auto-start WebSocket server on Neovim startup.
 --- @field terminal_cmd string|nil Custom terminal command to use when launching Claude.
+--- @field terminal_multiplexer boolean Skip opening neovim terminal when Claude is running externally.
 --- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
 --- @field track_selection boolean Enable sending selection updates to Claude.
 --- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
@@ -49,6 +50,7 @@ local default_config = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
   terminal_cmd = nil,
+  terminal_multiplexer = false,
   log_level = "info",
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Reduced from 200ms for better responsiveness in tree navigation
@@ -166,8 +168,10 @@ function M._process_queued_mentions()
     end
 
     -- Ensure terminal is visible when processing queued mentions
-    local terminal = require("claudecode.terminal")
-    terminal.ensure_visible()
+    if not M.state.config.terminal_multiplexer then
+      local terminal = require("claudecode.terminal")
+      terminal.ensure_visible()
+    end
 
     local success_count = 0
     local total_count = #mentions_to_send
@@ -260,7 +264,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
   if M.is_claude_connected() then
     -- Claude is connected, send immediately and ensure terminal is visible
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
-    if success then
+    if success and not M.state.config.terminal_multiplexer then
       local terminal = require("claudecode.terminal")
       terminal.ensure_visible()
     end
@@ -276,11 +280,17 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 
     queue_at_mention(mention_data)
 
-    -- Launch terminal with Claude Code
-    local terminal = require("claudecode.terminal")
-    terminal.open()
-
-    logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    -- Launch terminal with Claude Code (unless using external multiplexer)
+    if not M.state.config.terminal_multiplexer then
+      local terminal = require("claudecode.terminal")
+      terminal.open()
+      logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    else
+      logger.debug(
+        context,
+        "Queued @ mention (terminal_multiplexer mode - not launching internal terminal): " .. file_path
+      )
+    end
 
     return true, nil
   end
