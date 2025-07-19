@@ -278,3 +278,13 @@ describe("Diff Module", function()
 
   teardown()
 end)
+-- Testing simplified unified diff implementation with git diff approach
+-- Test unified diff mode showing git-style diff output
+-- Fixed vsplit in blocking diff path
+-- Testing enhanced unified diff with inline rendering
+--
+-- Testing correct unified diff: shows full file with annotations
+-- Now using diffthis for proper folding and navigation
+-- Test unified diff mode with complete file view and diff overlays
+-- Testing navigation and folding in unified diff mode
+-- Now using dedicated unified_diff.lua module with vgit/unified approach

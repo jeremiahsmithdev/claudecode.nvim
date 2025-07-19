@@ -191,6 +191,7 @@ describe("Config module", function()
         show_diff_stats = true,
         vertical_split = true,
         open_in_current_tab = true,
+        diff_mode = "split",
       },
     }
 

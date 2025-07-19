@@ -645,7 +645,7 @@ function M._create_commands()
         -- Exit any potential visual mode (for consistency)
         pcall(function()
           if vim.api and vim.api.nvim_feedkeys then
-            local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+            local esc = vim.api.nvim_replace_termcodes("<Esc>", true)
             vim.api.nvim_feedkeys(esc, "i", true)
           end
         end)
@@ -887,7 +887,7 @@ function M._create_commands()
     vim.api.nvim_create_user_command("ClaudeCode", function(opts)
       local current_mode = vim.fn.mode()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
-        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true), "n", false)
       end
       local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
       terminal.simple_toggle({}, cmd_args)
@@ -899,7 +899,7 @@ function M._create_commands()
     vim.api.nvim_create_user_command("ClaudeCodeFocus", function(opts)
       local current_mode = vim.fn.mode()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
-        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true), "n", false)
       end
       local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
       terminal.focus_toggle({}, cmd_args)

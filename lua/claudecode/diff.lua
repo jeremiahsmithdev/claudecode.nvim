@@ -222,6 +222,7 @@ local function detect_filetype(path, buf)
   }
   return simple_map[ext]
 end
+
 --- Open diff using native Neovim functionality
 -- @param old_file_path string Path to the original file
 -- @param new_file_path string Path to the new file (used for naming)
@@ -229,6 +230,7 @@ end
 -- @param tab_name string Name for the diff tab/view
 -- @return table Result with provider, tab_name, and success status
 function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  -- Note: unified mode is handled in _create_diff_view_from_window
   local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
   local tmp_file, err = create_temp_file(new_file_contents, new_filename)
   if not tmp_file then
@@ -562,33 +564,75 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
     original_buffer = vim.api.nvim_win_get_buf(target_window)
   end
 
-  vim.cmd("diffthis")
+  -- Check if we're in unified mode
+  local main_module = require("claudecode")
+  local diff_mode = main_module.state.config.diff_opts.diff_mode or "split"
 
-  vim.cmd("vsplit")
-  local new_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(new_win, new_buffer)
+  if diff_mode == "unified" then
+    -- Unified mode: use dedicated unified_diff module
+    local unified_diff = require("claudecode.unified_diff")
 
-  -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
-  local original_ft = detect_filetype(old_file_path, original_buffer)
-  if original_ft and original_ft ~= "" then
-    vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
+    -- Get new buffer content for unified diff
+    local new_lines = vim.api.nvim_buf_get_lines(new_buffer, 0, -1, false)
+    local new_content = table.concat(new_lines, "\n")
+
+    -- Create unified diff view
+    local result = unified_diff.open_unified_diff(
+      old_file_path,
+      old_file_path, -- Use old_file_path for both since we want to show as editing the original
+      new_content,
+      tab_name,
+      target_window
+    )
+
+    if result.success then
+      diff_info = {
+        new_window = target_window,
+        target_window = target_window,
+        original_buffer = result.buffer,
+        new_buffer = result.buffer, -- For cleanup tracking
+      }
+    else
+      -- Fall back to split mode if unified diff fails
+      logger.warn("unified_diff", "Failed to create unified diff, falling back to split mode")
+      diff_mode = "split" -- Force split mode for fallback
+    end
   end
-  vim.cmd("diffthis")
 
-  vim.cmd("wincmd =")
-  vim.api.nvim_set_current_win(new_win)
+  -- Only run split mode if we're not in unified mode or unified mode failed
+  if diff_mode == "split" then
+    -- Split mode: original behavior
+    vim.cmd("diffthis")
 
-  -- Store diff context in buffer variables for user commands
-  vim.b[new_buffer].claudecode_diff_tab_name = tab_name
-  vim.b[new_buffer].claudecode_diff_new_win = new_win
-  vim.b[new_buffer].claudecode_diff_target_win = target_window
+    vim.cmd("vsplit")
+    local new_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(new_win, new_buffer)
 
-  -- Return window information for later storage
-  return {
-    new_window = new_win,
-    target_window = target_window,
-    original_buffer = original_buffer,
-  }
+    -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
+    local original_ft = detect_filetype(old_file_path, original_buffer)
+    if original_ft and original_ft ~= "" then
+      vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
+    end
+    vim.cmd("diffthis")
+
+    vim.cmd("wincmd =")
+    vim.api.nvim_set_current_win(new_win)
+
+    -- Store diff context in buffer variables for user commands
+    vim.b[new_buffer].claudecode_diff_tab_name = tab_name
+    vim.b[new_buffer].claudecode_diff_new_win = new_win
+    vim.b[new_buffer].claudecode_diff_target_win = target_window
+
+    -- Set diff_info for split mode
+    diff_info = {
+      new_window = new_win,
+      target_window = target_window,
+      original_buffer = original_buffer,
+      new_buffer = new_buffer, -- For cleanup tracking
+    }
+  end
+
+  return diff_info
 end
 
 --- Clean up diff state and resources
@@ -603,6 +647,14 @@ function M._cleanup_diff_state(tab_name, reason)
   -- Clean up autocmds
   for _, autocmd_id in ipairs(diff_data.autocmd_ids or {}) do
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
+  end
+
+  -- Clean up unified diff resources
+  if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
+    local ok, unified_diff = pcall(require, "claudecode.unified_diff")
+    if ok then
+      pcall(unified_diff.cleanup_unified_diff, diff_data.new_buffer)
+    end
   end
 
   -- Clean up the new buffer only (not the old buffer which is the user's file)
@@ -709,7 +761,14 @@ function M._setup_blocking_diff(params, resolution_callback)
       M._create_diff_view_from_window(target_window, params.old_file_path, new_buffer, tab_name, is_new_file)
 
     -- Step 5: Register autocmds for user interaction monitoring
-    local autocmd_ids = register_diff_autocmds(tab_name, new_buffer)
+    -- Use the actual buffer the user interacts with (important for unified mode)
+    local buffer_for_autocmds = diff_info.new_buffer or new_buffer
+    local autocmd_ids = register_diff_autocmds(tab_name, buffer_for_autocmds)
+    
+    -- Clean up original scratch buffer if unified mode created a different buffer
+    if diff_info.new_buffer and diff_info.new_buffer ~= new_buffer then
+      pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
+    end
 
     -- Step 6: Store diff state
 
@@ -723,7 +782,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       old_file_path = params.old_file_path,
       new_file_path = params.new_file_path,
       new_file_contents = params.new_file_contents,
-      new_buffer = new_buffer,
+      new_buffer = buffer_for_autocmds,
       new_window = diff_info.new_window,
       target_window = diff_info.target_window,
       original_buffer = diff_info.original_buffer,

@@ -17,6 +17,7 @@ M.defaults = {
     show_diff_stats = true,
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
+    diff_mode = "split", -- "split" or "unified"
   },
 }
 
@@ -74,6 +75,16 @@ function M.validate(config)
   assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
   assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
 
+  local valid_diff_modes = { "split", "unified" }
+  local is_valid_diff_mode = false
+  for _, mode in ipairs(valid_diff_modes) do
+    if config.diff_opts.diff_mode == mode then
+      is_valid_diff_mode = true
+      break
+    end
+  end
+  assert(is_valid_diff_mode, "diff_opts.diff_mode must be one of: " .. table.concat(valid_diff_modes, ", "))
+
   return true
 end
 
@@ -93,3 +104,4 @@ function M.apply(user_config)
 end
 
 return M
+-- Test modification for unified diff folding verification with fixed buffer cleanup

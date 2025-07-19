@@ -24,7 +24,7 @@ end
 -- ESC key constant matching neo-tree's implementation
 local ESC_KEY
 local success = pcall(function()
-  ESC_KEY = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+  ESC_KEY = vim.api.nvim_replace_termcodes("<Esc>", true)
 end)
 if not success then
   ESC_KEY = "\27"
