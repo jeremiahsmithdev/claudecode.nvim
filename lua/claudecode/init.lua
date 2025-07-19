@@ -36,7 +36,6 @@ M.version = {
 --- @field port_range {min: integer, max: integer} Port range for WebSocket server.
 --- @field auto_start boolean Auto-start WebSocket server on Neovim startup.
 --- @field terminal_cmd string|nil Custom terminal command to use when launching Claude.
---- @field terminal_multiplexer boolean Skip opening neovim terminal when Claude is running externally.
 --- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
 --- @field track_selection boolean Enable sending selection updates to Claude.
 --- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
@@ -50,7 +49,6 @@ local default_config = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
   terminal_cmd = nil,
-  terminal_multiplexer = false,
   log_level = "info",
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Reduced from 200ms for better responsiveness in tree navigation
@@ -88,7 +86,7 @@ M.state = {
 ---@alias ClaudeCode.TerminalOpts { \
 ---  split_side?: "left"|"right", \
 ---  split_width_percentage?: number, \
----  provider?: "auto"|"snacks"|"native", \
+---  provider?: "auto"|"snacks"|"native"|"external"|"tmux", \
 ---  show_native_term_exit_tip?: boolean }
 ---
 ---@alias ClaudeCode.SetupOpts { \
@@ -167,9 +165,9 @@ function M._process_queued_mentions()
       return
     end
 
-    -- Ensure terminal is visible when processing queued mentions
-    if not M.state.config.terminal_multiplexer then
-      local terminal = require("claudecode.terminal")
+    -- Ensure terminal is visible when processing queued mentions (unless using external terminal)
+    local terminal = require("claudecode.terminal")
+    if not terminal.is_external_provider() then
       terminal.ensure_visible()
     end
 
@@ -262,15 +260,17 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 
   -- Check if Claude Code is connected
   if M.is_claude_connected() then
-    -- Claude is connected, send immediately and ensure terminal is visible
+    -- Claude is connected, send immediately and ensure terminal is visible (unless using external terminal)
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
-    if success and not M.state.config.terminal_multiplexer then
+    if success then
       local terminal = require("claudecode.terminal")
-      terminal.ensure_visible()
+      if not terminal.is_external_provider() then
+        terminal.ensure_visible()
+      end
     end
     return success, error_msg
   else
-    -- Claude not connected, queue the mention and launch terminal
+    -- Claude not connected, queue the mention and optionally launch terminal
     local mention_data = {
       file_path = file_path,
       start_line = start_line,
@@ -280,16 +280,14 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 
     queue_at_mention(mention_data)
 
-    -- Launch terminal with Claude Code (unless using external multiplexer)
-    if not M.state.config.terminal_multiplexer then
-      local terminal = require("claudecode.terminal")
+    local terminal = require("claudecode.terminal")
+    if terminal.is_external_provider() then
+      -- Don't launch internal terminal - assume external Claude Code instance exists
+      logger.debug(context, "Queued @ mention for external Claude Code instance: " .. file_path)
+    else
+      -- Launch terminal with Claude Code
       terminal.open()
       logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
-    else
-      logger.debug(
-        context,
-        "Queued @ mention (terminal_multiplexer mode - not launching internal terminal): " .. file_path
-      )
     end
 
     return true, nil
@@ -506,6 +504,20 @@ function M._create_commands()
   vim.api.nvim_create_user_command("ClaudeCodeStatus", function()
     if M.state.server and M.state.port then
       logger.info("command", "Claude Code integration is running on port " .. tostring(M.state.port))
+
+      -- Check if using external terminal provider and provide guidance
+      local terminal_module_ok, terminal_module = pcall(require, "claudecode.terminal")
+      if terminal_module_ok and terminal_module then
+        if terminal_module.is_external_provider() then
+          local connection_count = M.state.server.get_connection_count and M.state.server.get_connection_count() or 0
+          if connection_count > 0 then
+            logger.info("command", "External Claude Code is connected (" .. connection_count .. " connection(s))")
+          else
+            logger.info("command", "MCP server ready for external Claude Code connections")
+            logger.info("command", "Run 'claude --ide' in your terminal to connect to this Neovim instance")
+          end
+        end
+      end
     else
       logger.info("command", "Claude Code integration is not running")
     end
@@ -930,6 +942,26 @@ function M._create_commands()
       terminal.close()
     end, {
       desc = "Close the Claude Code terminal window",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeTmux", function(opts)
+      local tmux_provider = require("claudecode.terminal.tmux")
+      if not tmux_provider.is_available() then
+        logger.error("command", "ClaudeCodeTmux: Not running in tmux session")
+        return
+      end
+
+      -- Use the normal terminal flow but force tmux provider by calling it directly
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+
+      local effective_config = { split_side = "right", split_width_percentage = 0.5 }
+      local cmd_string, claude_env_table = terminal.get_claude_command_and_env(cmd_args)
+
+      tmux_provider.setup({})
+      tmux_provider.open(cmd_string, claude_env_table, effective_config, true)
+    end, {
+      nargs = "*",
+      desc = "Open Claude Code in new tmux pane (requires tmux session)",
     })
   else
     logger.error(
