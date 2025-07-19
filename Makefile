@@ -3,11 +3,16 @@
 # Default target
 all: format check test
 
-# Detect if we are already inside a Nix shell
+# Detect if we are already inside a Nix shell or have tools locally
 ifeq (,$(IN_NIX_SHELL))
-NIX_PREFIX := nix develop .#ci -c
+  # Check if tools exist locally, otherwise use nix
+  ifneq (,$(shell which busted 2>/dev/null))
+    NIX_PREFIX :=
+  else
+    NIX_PREFIX := nix --extra-experimental-features nix-command --extra-experimental-features flakes develop .#ci --command
+  endif
 else
-NIX_PREFIX :=
+  NIX_PREFIX :=
 endif
 
 # Check for syntax errors
@@ -19,7 +24,16 @@ check:
 
 # Format all files
 format:
-	nix fmt
+	@if command -v stylua >/dev/null 2>&1; then \
+		echo "Using local stylua..."; \
+		stylua lua/ tests/; \
+	elif command -v nix >/dev/null 2>&1; then \
+		echo "Using nix fmt..."; \
+		nix --extra-experimental-features nix-command --extra-experimental-features flakes fmt; \
+	else \
+		echo "Neither stylua nor nix found. Please install one of them."; \
+		exit 1; \
+	fi
 
 # Run tests
 test:
@@ -29,7 +43,13 @@ test:
 	echo "Found test files:"; \
 	echo "$$TEST_FILES"; \
 	if [ -n "$$TEST_FILES" ]; then \
-		$(NIX_PREFIX) busted --coverage -v $$TEST_FILES; \
+		if command -v luacov >/dev/null 2>&1; then \
+			echo "Running tests with coverage..."; \
+			$(NIX_PREFIX) busted --coverage -v $$TEST_FILES; \
+		else \
+			echo "Running tests without coverage (luacov not found)..."; \
+			$(NIX_PREFIX) busted -v $$TEST_FILES; \
+		fi; \
 	else \
 		echo "No test files found"; \
 	fi
