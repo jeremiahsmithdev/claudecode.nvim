@@ -96,7 +96,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           client.handshake_complete = true
           client.state = "connected"
           client.buffer = remaining
-          logger.debug("client", "WebSocket connection established for client:", client.id)
+          logger.info("client", "WebSocket connection established for client:", client.id)
 
           if #client.buffer > 0 then
             M.process_data(client, "", on_message, on_close, on_error, auth_token)

@@ -36,7 +36,8 @@ M.version = {
 --- @field port_range {min: integer, max: integer} Port range for WebSocket server.
 --- @field auto_start boolean Auto-start WebSocket server on Neovim startup.
 --- @field terminal_cmd string|nil Custom terminal command to use when launching Claude.
---- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
+--- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level for file logging.
+--- @field notify_log_level "trace"|"debug"|"info"|"warn"|"error" Log level for notifications.
 --- @field track_selection boolean Enable sending selection updates to Claude.
 --- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
 --- @field connection_wait_delay number Milliseconds to wait after connection before sending queued @ mentions.
@@ -983,6 +984,21 @@ function M._create_commands()
     diff.deny_current_diff()
   end, {
     desc = "Deny/reject the current diff changes",
+  })
+
+  vim.api.nvim_create_user_command("ClaudeCodeShowLog", function()
+    local log_path = logger.get_log_file_path()
+    if log_path then
+      if vim.fn.filereadable(log_path) == 1 then
+        vim.cmd("edit " .. vim.fn.fnameescape(log_path))
+      else
+        vim.notify("Claude Code log file not found: " .. log_path, vim.log.levels.WARN)
+      end
+    else
+      vim.notify("Claude Code log file not available", vim.log.levels.WARN)
+    end
+  end, {
+    desc = "Open the Claude Code log file",
   })
 end
 

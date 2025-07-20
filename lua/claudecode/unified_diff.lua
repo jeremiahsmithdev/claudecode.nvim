@@ -13,8 +13,10 @@ local ns_id = vim.api.nvim_create_namespace("claudecode_unified_diff")
 local function parse_unified_diff(diff_output)
   local hunks = {}
   local current_hunk = nil
+  local line_count = 0
 
   for line in diff_output:gmatch("[^\n]*") do
+    line_count = line_count + 1
     -- Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
     local old_start, old_count, new_start, new_count = line:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
     if old_start then
@@ -27,15 +29,25 @@ local function parse_unified_diff(diff_output)
       }
       table.insert(hunks, current_hunk)
     elseif current_hunk then
-      -- Parse diff line content
-      local prefix = line:sub(1, 1)
-      if prefix == "+" or prefix == "-" or prefix == " " then
-        table.insert(current_hunk.lines, {
-          type = prefix == "+" and "add" or (prefix == "-" and "remove" or "context"),
-          content = line:sub(2), -- Remove the +/- prefix
-        })
+      -- Skip "No newline at end of file" markers
+      if line:match("^\\ No newline at end of file") then
+        -- Skip this line
+      else
+        -- Parse diff line content
+        local prefix = line:sub(1, 1)
+        if prefix == "+" or prefix == "-" or prefix == " " then
+          table.insert(current_hunk.lines, {
+            type = prefix == "+" and "add" or (prefix == "-" and "remove" or "context"),
+            content = line:sub(2), -- Remove the +/- prefix
+          })
+        end
       end
     end
+  end
+
+  logger.debug("unified_diff", "Parsed", #hunks, "hunks from", line_count, "lines")
+  for i, hunk in ipairs(hunks) do
+    logger.debug("unified_diff", "Hunk", i, ":", "old_start =", hunk.old_start, "new_start =", hunk.new_start, "lines =", #hunk.lines)
   end
 
   return hunks
@@ -56,6 +68,22 @@ local function generate_unified_diff(old_file_path, new_content)
       file:close()
     end
   end
+  
+  logger.debug("unified_diff", "generate_unified_diff for", old_file_path)
+  logger.debug("unified_diff", "old_content length:", #old_content, "ends with newline:", old_content:sub(-1) == "\n")
+  logger.debug("unified_diff", "new_content length:", #new_content, "ends with newline:", new_content:sub(-1) == "\n")
+
+  -- Normalize newline endings to match original file
+  local normalized_new_content = new_content
+  if #old_content > 0 and #new_content > 0 then
+    if old_content:sub(-1) == "\n" and new_content:sub(-1) ~= "\n" then
+      normalized_new_content = new_content .. "\n"
+      logger.debug("unified_diff", "Added missing newline to match original file")
+    elseif old_content:sub(-1) ~= "\n" and new_content:sub(-1) == "\n" then
+      normalized_new_content = new_content:sub(1, -2)
+      logger.debug("unified_diff", "Removed extra newline to match original file")
+    end
+  end
 
   -- Create temporary files for diff
   local tmp_dir = vim.fn.tempname()
@@ -74,7 +102,7 @@ local function generate_unified_diff(old_file_path, new_content)
 
   local new_file = io.open(new_tmp, "w")
   if new_file then
-    new_file:write(new_content)
+    new_file:write(normalized_new_content)
     new_file:close()
   else
     return nil
@@ -95,6 +123,9 @@ local function generate_unified_diff(old_file_path, new_content)
   os.remove(old_tmp)
   os.remove(new_tmp)
   vim.fn.delete(tmp_dir, "d")
+
+  logger.debug("unified_diff", "git diff output length:", #result)
+  logger.debug("unified_diff", "git diff last 200 chars:", result:sub(-200))
 
   return result
 end
@@ -127,15 +158,14 @@ local function apply_unified_diff_highlighting(buf, hunks)
         new_line_idx = new_line_idx + 1
       elseif line.type == "remove" then
         -- Show removed line as virtual text (unified.nvim style)
-        local attach_line = math.max(new_line_idx - 1, 0)
-        if attach_line < buf_line_count then
-          vim.api.nvim_buf_set_extmark(buf, ns_id, attach_line, 0, {
+        -- Attach to the current line position, not the previous line
+        if new_line_idx < buf_line_count then
+          vim.api.nvim_buf_set_extmark(buf, ns_id, new_line_idx, 0, {
             virt_lines = { { { line.content, "DiffDelete" } } },
             virt_lines_above = true,
-            sign_text = "-",
-            sign_hl_group = "DiffDelete",
+            -- Removed sign_text as it appears on wrong line with virtual text
           })
-          table.insert(change_lines, attach_line + 1) -- 1-indexed for navigation
+          table.insert(change_lines, new_line_idx + 1) -- 1-indexed for navigation
         end
         -- Don't increment new_line_idx for removed lines
       elseif line.type == "context" then
@@ -209,9 +239,23 @@ end
 -- @param target_window number Window to display the diff in
 -- @return table Result with success status and buffer info
 function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, tab_name, target_window)
+  logger.debug("unified_diff", "open_unified_diff called for", old_file_path)
+  logger.debug("unified_diff", "new_file_contents length:", #new_file_contents, "ends with newline:", new_file_contents:sub(-1) == "\n")
+  
   -- Create buffer with NEW file content (so it's fully editable)
   local buf = vim.api.nvim_create_buf(false, true)
   local new_lines = vim.split(new_file_contents, "\n")
+  logger.debug("unified_diff", "vim.split produced", #new_lines, "lines")
+  if #new_lines > 0 then
+    logger.debug("unified_diff", "Last line is empty:", new_lines[#new_lines] == "")
+  end
+  
+  -- vim.split adds empty string at end if content ends with \n
+  -- Remove it to match how Neovim handles file content
+  if #new_lines > 0 and new_lines[#new_lines] == "" then
+    logger.debug("unified_diff", "Removing empty last line")
+    table.remove(new_lines, #new_lines)
+  end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
   vim.api.nvim_buf_set_name(buf, old_file_path .. " (diff)")
 
@@ -262,6 +306,9 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
     provider = "unified",
   }
 end
+
+-- This function cleans up extmarks when unified diff is closed
+-- Testing newline normalization fix - should eliminate last line issue
 
 --- Clean up unified diff resources
 -- @param buf number Buffer handle

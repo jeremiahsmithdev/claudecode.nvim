@@ -19,26 +19,35 @@ local level_values = {
 }
 
 local current_log_level_value = M.levels.INFO
+local current_notify_log_level_value = M.levels.INFO
+local log_file_path = nil
+local log_to_file = false
 
 --- @param plugin_config table The configuration table (e.g., from claudecode.init.state.config).
 function M.setup(plugin_config)
   local conf = plugin_config
 
-  if conf and conf.log_level and level_values[conf.log_level] then
-    current_log_level_value = level_values[conf.log_level]
-  else
-    vim.notify(
-      "ClaudeCode Logger: Invalid or missing log_level in configuration (received: "
-        .. tostring(conf and conf.log_level)
-        .. "). Defaulting to INFO.",
-      vim.log.levels.WARN
-    )
-    current_log_level_value = M.levels.INFO
+  -- Set file log level
+  current_log_level_value = (conf and conf.log_level and level_values[conf.log_level]) or M.levels.INFO
+  
+  -- Set notify log level (defaults to same as log_level if not specified)
+  current_notify_log_level_value = (conf and conf.notify_log_level and level_values[conf.notify_log_level]) or current_log_level_value
+  
+  -- Set up file logging
+  log_file_path = vim.fn.stdpath("cache") .. "/claudecode.log"
+  log_to_file = true
+  
+  -- Clear log file on setup
+  local file = io.open(log_file_path, "w")
+  if file then
+    file:write("=== ClaudeCode Log Started at " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n")
+    file:close()
   end
 end
 
 local function log(level, component, message_parts)
-  if level > current_log_level_value then
+  -- Skip if level is higher than both file and notify levels
+  if level > current_log_level_value and level > current_notify_log_level_value then
     return
   end
 
@@ -68,21 +77,35 @@ local function log(level, component, message_parts)
     end
   end
 
-  if level == M.levels.ERROR then
-    vim.schedule(function()
-      vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
-    end)
-  elseif level == M.levels.WARN then
-    vim.schedule(function()
-      vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
-    end)
-  else
-    -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
-    -- to make them appear in :messages, and wrap in vim.schedule
-    -- to avoid "nvim_echo must not be called in a fast event context".
-    vim.schedule(function()
-      vim.api.nvim_echo({ { prefix .. " " .. message, "Normal" } }, true, {})
-    end)
+  -- Write to file if level meets file log threshold
+  if log_to_file and log_file_path and level <= current_log_level_value then
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local file_message = string.format("[%s] %s %s\n", timestamp, prefix, message)
+    local file = io.open(log_file_path, "a")
+    if file then
+      file:write(file_message)
+      file:close()
+    end
+  end
+
+  -- Send notifications if level meets notify threshold
+  if level <= current_notify_log_level_value then
+    if level == M.levels.ERROR then
+      vim.schedule(function()
+        vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
+      end)
+    elseif level == M.levels.WARN then
+      vim.schedule(function()
+        vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
+      end)
+    else
+      -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
+      -- to make them appear in :messages, and wrap in vim.schedule
+      -- to avoid "nvim_echo must not be called in a fast event context".
+      vim.schedule(function()
+        vim.api.nvim_echo({ { prefix .. " " .. message, "Normal" } }, true, {})
+      end)
+    end
   end
 end
 
@@ -145,6 +168,12 @@ function M.trace(component, ...)
   else
     log(M.levels.TRACE, component, { ... })
   end
+end
+
+--- Get the log file path
+-- @return string|nil The log file path
+function M.get_log_file_path()
+  return log_file_path
 end
 
 local default_config_for_initial_setup = require("claudecode.config").defaults

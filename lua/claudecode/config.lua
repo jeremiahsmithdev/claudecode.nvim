@@ -7,6 +7,7 @@ M.defaults = {
   auto_start = true,
   terminal_cmd = nil,
   log_level = "info",
+  notify_log_level = "info", -- Separate log level for notifications (file logging uses log_level)
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
   connection_wait_delay = 200, -- Milliseconds to wait after connection before sending queued @ mentions
@@ -49,6 +50,15 @@ function M.validate(config)
     end
   end
   assert(is_valid_log_level, "log_level must be one of: " .. table.concat(valid_log_levels, ", "))
+
+  local is_valid_notify_log_level = false
+  for _, level in ipairs(valid_log_levels) do
+    if config.notify_log_level == level then
+      is_valid_notify_log_level = true
+      break
+    end
+  end
+  assert(is_valid_notify_log_level, "notify_log_level must be one of: " .. table.concat(valid_log_levels, ", "))
 
   assert(type(config.track_selection) == "boolean", "track_selection must be a boolean")
 
