@@ -554,6 +554,17 @@ function M._create_commands()
     desc = "Stop Claude Code integration",
   })
 
+  vim.api.nvim_create_user_command("ClaudeCreateLockfile", function()
+    local success, result = M.start(false) -- Don't show startup notification
+    if success then
+      logger.info("command", "Lockfile created/verified for current Neovim instance on port " .. tostring(result))
+    else
+      logger.error("command", "Failed to create lockfile: " .. tostring(result))
+    end
+  end, {
+    desc = "Create or verify lockfile for current Neovim instance",
+  })
+
   vim.api.nvim_create_user_command("ClaudeCodeStatus", function()
     if M.state.server and M.state.port then
       logger.info("command", "Claude Code integration is running on port " .. tostring(M.state.port))

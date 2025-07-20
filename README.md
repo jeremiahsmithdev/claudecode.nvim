@@ -178,6 +178,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 ## Troubleshooting
 
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
+- **Lockfile missing or corrupted?** Run `:ClaudeCreateLockfile` to create/verify the lockfile for current Neovim instance
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
 - **Auto-start not working?** If using external terminal provider, ensure you're using `event = "VeryLazy"` instead of `keys = {...}` only, as lazy loading prevents auto-start from running
