@@ -111,22 +111,6 @@ function M.open(cmd_string, env_table, effective_config, focus)
     return
   end
 
-  -- Clean up other lockfiles with current cwd if config option is enabled
-  if claudecode.state.config.tmux_cleanup_lockfiles then
-    logger.debug("terminal", "tmux_cleanup_lockfiles is enabled, starting lockfile cleanup")
-    local lockfile = require("claudecode.lockfile")
-    local cleanup_success, cleanup_count, cleanup_error = lockfile.cleanup_lockfiles_with_current_cwd()
-    
-    if cleanup_success then
-      if cleanup_count > 0 then
-        logger.info("terminal", "Cleaned up " .. cleanup_count .. " lockfiles with current working directory")
-      else
-        logger.debug("terminal", "No lockfiles found to clean up")
-      end
-    else
-      logger.warn("terminal", "Failed to cleanup lockfiles: " .. (cleanup_error or "unknown error"))
-    end
-  end
 
   if get_active_pane_id() then
     logger.debug("terminal", "Claude tmux pane already exists, focusing existing pane")

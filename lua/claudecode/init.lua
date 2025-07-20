@@ -371,7 +371,102 @@ function M.start(show_startup_notification)
   local server = require("claudecode.server.init")
   local lockfile = require("claudecode.lockfile")
 
-  -- Clean up other lockfiles with current cwd if config option is enabled (for tmux mode)
+  -- Check if a lockfile already exists for this Neovim instance
+  local existing_lockfile, existing_port, existing_path = lockfile.get_lockfile_for_current_pid()
+  
+  if existing_lockfile then
+    logger.debug("init", "Found existing lockfile for current PID at port " .. existing_port)
+    
+    -- Try to get auth token from existing lockfile
+    local token_success, existing_auth_token, token_error = lockfile.get_auth_token(existing_port)
+    if token_success and existing_auth_token then
+      -- Start server with existing auth token and port
+      M.state.port = existing_port
+      M.state.auth_token = existing_auth_token
+      
+      local success, result = server.start(M.state.config, existing_auth_token)
+      if success then
+        M.state.server = server
+        logger.debug("init", "Reusing existing lockfile and started server on port " .. existing_port)
+      else
+        logger.warn("init", "Failed to start server with existing lockfile, creating new setup: " .. (result or "unknown error"))
+        existing_lockfile = false
+      end
+    else
+      logger.warn("init", "Could not read auth token from existing lockfile: " .. (token_error or "unknown error"))
+      -- Fall through to create new setup
+      existing_lockfile = false
+    end
+  end
+
+  local auth_token = M.state.auth_token
+  
+  if not existing_lockfile then
+    -- Generate auth token first so we can pass it to the server
+    local auth_success, auth_result = pcall(function()
+      return lockfile.generate_auth_token()
+    end)
+
+    if not auth_success then
+      local error_msg = "Failed to generate authentication token: " .. (auth_result or "unknown error")
+      logger.error("init", error_msg)
+      return false, error_msg
+    end
+
+    auth_token = auth_result
+
+    -- Validate the generated auth token
+    if not auth_token or type(auth_token) ~= "string" or #auth_token < 10 then
+      local error_msg = "Invalid authentication token generated"
+      logger.error("init", error_msg)
+      return false, error_msg
+    end
+
+    local success, result = server.start(M.state.config, auth_token)
+
+    if not success then
+      local error_msg = "Failed to start Claude Code server: " .. (result or "unknown error")
+      if result and result:find("auth") then
+        error_msg = error_msg .. " (authentication related)"
+      end
+      logger.error("init", error_msg)
+      return false, error_msg
+    end
+
+    M.state.server = server
+    M.state.port = tonumber(result)
+    M.state.auth_token = auth_token
+
+    local lock_success, lock_result, returned_auth_token = lockfile.create(M.state.port, auth_token)
+
+    if not lock_success then
+      server.stop()
+      M.state.server = nil
+      M.state.port = nil
+      M.state.auth_token = nil
+
+      local error_msg = "Failed to create lock file: " .. (lock_result or "unknown error")
+      if lock_result and lock_result:find("auth") then
+        error_msg = error_msg .. " (authentication token issue)"
+      end
+      logger.error("init", error_msg)
+      return false, error_msg
+    end
+
+    -- Verify that the auth token in the lock file matches what we generated
+    if returned_auth_token ~= auth_token then
+      server.stop()
+      M.state.server = nil
+      M.state.port = nil
+      M.state.auth_token = nil
+
+      local error_msg = "Authentication token mismatch between server and lock file"
+      logger.error("init", error_msg)
+      return false, error_msg
+    end
+  end
+
+  -- Now that we have ensured current instance has a lockfile, clean up other lockfiles
   if M.state.config.tmux_cleanup_lockfiles then
     local tmux_provider = require("claudecode.terminal.tmux")
     if tmux_provider.is_available() then
@@ -390,69 +485,6 @@ function M.start(show_startup_notification)
     end
   end
 
-  -- Generate auth token first so we can pass it to the server
-  local auth_token
-  local auth_success, auth_result = pcall(function()
-    return lockfile.generate_auth_token()
-  end)
-
-  if not auth_success then
-    local error_msg = "Failed to generate authentication token: " .. (auth_result or "unknown error")
-    logger.error("init", error_msg)
-    return false, error_msg
-  end
-
-  auth_token = auth_result
-
-  -- Validate the generated auth token
-  if not auth_token or type(auth_token) ~= "string" or #auth_token < 10 then
-    local error_msg = "Invalid authentication token generated"
-    logger.error("init", error_msg)
-    return false, error_msg
-  end
-
-  local success, result = server.start(M.state.config, auth_token)
-
-  if not success then
-    local error_msg = "Failed to start Claude Code server: " .. (result or "unknown error")
-    if result and result:find("auth") then
-      error_msg = error_msg .. " (authentication related)"
-    end
-    logger.error("init", error_msg)
-    return false, error_msg
-  end
-
-  M.state.server = server
-  M.state.port = tonumber(result)
-  M.state.auth_token = auth_token
-
-  local lock_success, lock_result, returned_auth_token = lockfile.create(M.state.port, auth_token)
-
-  if not lock_success then
-    server.stop()
-    M.state.server = nil
-    M.state.port = nil
-    M.state.auth_token = nil
-
-    local error_msg = "Failed to create lock file: " .. (lock_result or "unknown error")
-    if lock_result and lock_result:find("auth") then
-      error_msg = error_msg .. " (authentication token issue)"
-    end
-    logger.error("init", error_msg)
-    return false, error_msg
-  end
-
-  -- Verify that the auth token in the lock file matches what we generated
-  if returned_auth_token ~= auth_token then
-    server.stop()
-    M.state.server = nil
-    M.state.port = nil
-    M.state.auth_token = nil
-
-    local error_msg = "Authentication token mismatch between server and lock file"
-    logger.error("init", error_msg)
-    return false, error_msg
-  end
 
   if M.state.config.track_selection then
     local selection = require("claudecode.selection")

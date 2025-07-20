@@ -367,4 +367,42 @@ function M.cleanup_lockfiles_with_current_cwd()
   return true, cleaned_count, nil
 end
 
+--- Check if a lockfile exists for the current Neovim instance (by PID)
+---@return boolean exists Whether a lockfile exists for current PID
+---@return number|nil port The port number if lockfile exists, nil otherwise
+---@return string|nil lockfile_path The path to the existing lockfile, nil otherwise
+function M.get_lockfile_for_current_pid()
+  local current_pid = vim.fn.getpid()
+
+  -- Check if lock directory exists
+  if vim.fn.isdirectory(M.lock_dir) == 0 then
+    return false, nil, nil
+  end
+
+  -- Get all .lock files in the directory
+  local lock_files = vim.fn.glob(M.lock_dir .. "/*.lock", false, true)
+  
+  for _, lock_path in ipairs(lock_files) do
+    -- Try to read and parse the lockfile
+    local file = io.open(lock_path, "r")
+    if file then
+      local content = file:read("*all")
+      file:close()
+      
+      if content and content ~= "" then
+        local ok, lock_data = pcall(vim.json.decode, content)
+        if ok and type(lock_data) == "table" and lock_data.pid == current_pid then
+          -- Extract port from filename (e.g., "12345.lock" -> 12345)
+          local port = lock_path:match("/(%d+)%.lock$")
+          if port then
+            return true, tonumber(port), lock_path
+          end
+        end
+      end
+    end
+  end
+
+  return false, nil, nil
+end
+
 return M
