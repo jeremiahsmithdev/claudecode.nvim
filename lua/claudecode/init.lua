@@ -44,6 +44,7 @@ M.version = {
 --- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
 --- @field queue_timeout number Maximum time to keep @ mentions in queue (milliseconds).
 --- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean } Options for the diff provider.
+--- @field tmux_cleanup_lockfiles boolean Clean up other lockfiles with current working directory when starting in tmux mode.
 
 --- @type ClaudeCode.Config
 local default_config = {
@@ -369,6 +370,25 @@ function M.start(show_startup_notification)
 
   local server = require("claudecode.server.init")
   local lockfile = require("claudecode.lockfile")
+
+  -- Clean up other lockfiles with current cwd if config option is enabled (for tmux mode)
+  if M.state.config.tmux_cleanup_lockfiles then
+    local tmux_provider = require("claudecode.terminal.tmux")
+    if tmux_provider.is_available() then
+      logger.debug("init", "In tmux session with cleanup enabled, cleaning up existing lockfiles")
+      local cleanup_success, cleanup_count, cleanup_error = lockfile.cleanup_lockfiles_with_current_cwd()
+      
+      if cleanup_success then
+        if cleanup_count > 0 then
+          logger.info("init", "Cleaned up " .. cleanup_count .. " existing lockfiles with current working directory")
+        else
+          logger.debug("init", "No existing lockfiles found to clean up")
+        end
+      else
+        logger.warn("init", "Failed to cleanup existing lockfiles: " .. (cleanup_error or "unknown error"))
+      end
+    end
+  end
 
   -- Generate auth token first so we can pass it to the server
   local auth_token

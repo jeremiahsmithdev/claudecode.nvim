@@ -291,4 +291,80 @@ function M.get_workspace_folders()
   return folders
 end
 
+--- Clean up lockfiles that contain the current working directory in their workspace folders
+---@return boolean success Whether the operation was successful
+---@return number count Number of lockfiles cleaned up
+---@return string? error Error message if operation failed
+function M.cleanup_lockfiles_with_current_cwd()
+  local logger = require("claudecode.logger")
+  local current_cwd = vim.fn.getcwd()
+  local current_pid = vim.fn.getpid()
+  local cleaned_count = 0
+  local errors = {}
+
+  logger.debug("lockfile", "Starting lockfile cleanup for current working directory: " .. current_cwd)
+  logger.debug("lockfile", "Current Neovim PID: " .. current_pid .. " (will be skipped)")
+
+  -- Check if lock directory exists
+  if vim.fn.isdirectory(M.lock_dir) == 0 then
+    return true, 0, nil -- No lock directory means nothing to clean
+  end
+
+  -- Get all .lock files in the directory
+  local lock_files = vim.fn.glob(M.lock_dir .. "/*.lock", false, true)
+  
+  for _, lock_path in ipairs(lock_files) do
+    -- Try to read and parse the lockfile
+    local file = io.open(lock_path, "r")
+    if file then
+      local content = file:read("*all")
+      file:close()
+      
+      if content and content ~= "" then
+        local ok, lock_data = pcall(vim.json.decode, content)
+        if ok and type(lock_data) == "table" and lock_data.workspaceFolders then
+          -- Skip if this is the current Neovim instance's lockfile
+          if lock_data.pid and lock_data.pid == current_pid then
+            logger.debug("lockfile", "Skipping current instance lockfile: " .. lock_path)
+          else
+            -- Check if current cwd is in workspace folders
+            for _, workspace_path in ipairs(lock_data.workspaceFolders) do
+              if workspace_path == current_cwd then
+                -- Delete this lockfile
+                local remove_ok, remove_err = pcall(function()
+                  return os.remove(lock_path)
+                end)
+                
+                if remove_ok then
+                  cleaned_count = cleaned_count + 1
+                  logger.debug("lockfile", "Removed lockfile with matching workspace (PID " .. (lock_data.pid or "unknown") .. "): " .. lock_path)
+                  break -- Found match, no need to check other workspace folders
+                else
+                  local error_msg = "Failed to remove " .. lock_path .. ": " .. (remove_err or "unknown error")
+                  logger.error("lockfile", error_msg)
+                  table.insert(errors, error_msg)
+                end
+              end
+            end
+          end
+        end
+      end
+    else
+      local error_msg = "Failed to read " .. lock_path
+      logger.error("lockfile", error_msg)
+      table.insert(errors, error_msg)
+    end
+  end
+
+  if cleaned_count > 0 then
+    logger.debug("lockfile", "Lockfile cleanup completed. Cleaned " .. cleaned_count .. " lockfiles")
+  end
+
+  if #errors > 0 then
+    return false, cleaned_count, table.concat(errors, "; ")
+  end
+
+  return true, cleaned_count, nil
+end
+
 return M

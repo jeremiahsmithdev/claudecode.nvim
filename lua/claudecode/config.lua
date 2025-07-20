@@ -20,6 +20,7 @@ M.defaults = {
     open_in_current_tab = true, -- Use current tab instead of creating new tab
     diff_mode = "split", -- "split" or "unified"
   },
+  tmux_cleanup_lockfiles = false, -- Clean up other lockfiles with current working directory when starting in tmux mode
 }
 
 --- Validates the provided configuration table.
@@ -94,6 +95,8 @@ function M.validate(config)
     end
   end
   assert(is_valid_diff_mode, "diff_opts.diff_mode must be one of: " .. table.concat(valid_diff_modes, ", "))
+
+  assert(type(config.tmux_cleanup_lockfiles) == "boolean", "tmux_cleanup_lockfiles must be a boolean")
 
   return true
 end
