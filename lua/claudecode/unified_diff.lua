@@ -28,6 +28,7 @@ local function parse_unified_diff(diff_output)
         lines = {},
       }
       table.insert(hunks, current_hunk)
+      logger.debug("unified_diff", "Found hunk: old", old_start, old_count, "new", new_start, new_count)
     elseif current_hunk then
       -- Skip "No newline at end of file" markers
       if line:match("^\\ No newline at end of file") then
@@ -36,10 +37,14 @@ local function parse_unified_diff(diff_output)
         -- Parse diff line content
         local prefix = line:sub(1, 1)
         if prefix == "+" or prefix == "-" or prefix == " " then
+          local line_type = prefix == "+" and "add" or (prefix == "-" and "remove" or "context")
           table.insert(current_hunk.lines, {
-            type = prefix == "+" and "add" or (prefix == "-" and "remove" or "context"),
+            type = line_type,
             content = line:sub(2), -- Remove the +/- prefix
           })
+          if line_type == "remove" then
+            logger.debug("unified_diff", "Found removed line:", line:sub(2))
+          end
         end
       end
     end
@@ -47,7 +52,18 @@ local function parse_unified_diff(diff_output)
 
   logger.debug("unified_diff", "Parsed", #hunks, "hunks from", line_count, "lines")
   for i, hunk in ipairs(hunks) do
-    logger.debug("unified_diff", "Hunk", i, ":", "old_start =", hunk.old_start, "new_start =", hunk.new_start, "lines =", #hunk.lines)
+    logger.debug(
+      "unified_diff",
+      "Hunk",
+      i,
+      ":",
+      "old_start =",
+      hunk.old_start,
+      "new_start =",
+      hunk.new_start,
+      "lines =",
+      #hunk.lines
+    )
   end
 
   return hunks
@@ -68,7 +84,7 @@ local function generate_unified_diff(old_file_path, new_content)
       file:close()
     end
   end
-  
+
   logger.debug("unified_diff", "generate_unified_diff for", old_file_path)
   logger.debug("unified_diff", "old_content length:", #old_content, "ends with newline:", old_content:sub(-1) == "\n")
   logger.debug("unified_diff", "new_content length:", #new_content, "ends with newline:", new_content:sub(-1) == "\n")
@@ -119,13 +135,26 @@ local function generate_unified_diff(old_file_path, new_content)
     new_tmp,
   })
 
+  local exit_code = vim.v.shell_error
+  logger.debug("unified_diff", "git diff exit code:", exit_code)
+
   -- Clean up temp files
   os.remove(old_tmp)
   os.remove(new_tmp)
   vim.fn.delete(tmp_dir, "d")
 
   logger.debug("unified_diff", "git diff output length:", #result)
-  logger.debug("unified_diff", "git diff last 200 chars:", result:sub(-200))
+  if #result > 0 then
+    logger.debug("unified_diff", "git diff first 500 chars:", result:sub(1, 500))
+  else
+    logger.debug("unified_diff", "git diff produced no output!")
+  end
+
+  -- Git diff returns exit code 1 when there are differences, which is normal
+  if exit_code > 1 then
+    logger.warn("unified_diff", "git diff failed with exit code:", exit_code)
+    return nil
+  end
 
   return result
 end
@@ -140,6 +169,8 @@ local function apply_unified_diff_highlighting(buf, hunks)
 
   local change_lines = {}
   local buf_line_count = vim.api.nvim_buf_line_count(buf)
+  local has_deletion_at_start = false
+  local deleted_lines_at_start = 0
 
   for _, hunk in ipairs(hunks) do
     local new_line_idx = hunk.new_start - 1 -- 0-indexed
@@ -158,21 +189,73 @@ local function apply_unified_diff_highlighting(buf, hunks)
         new_line_idx = new_line_idx + 1
       elseif line.type == "remove" then
         -- Show removed line as virtual text (unified.nvim style)
-        -- Attach to the current line position, not the previous line
-        if new_line_idx < buf_line_count then
-          vim.api.nvim_buf_set_extmark(buf, ns_id, new_line_idx, 0, {
-            virt_lines = { { { line.content, "DiffDelete" } } },
-            virt_lines_above = true,
-            -- Removed sign_text as it appears on wrong line with virtual text
-          })
-          table.insert(change_lines, new_line_idx + 1) -- 1-indexed for navigation
+        -- For removed lines at the beginning, attach to line 0 with virt_lines_above = true
+        local attach_line = 0
+        if new_line_idx > 0 then
+          -- For removals not at the beginning, attach to the previous line
+          attach_line = math.min(new_line_idx - 1, buf_line_count - 1)
+          attach_line = math.max(attach_line, 0)
+        else
+          -- Track deletions at the very beginning
+          has_deletion_at_start = true
+          deleted_lines_at_start = deleted_lines_at_start + 1
         end
+
+        logger.debug(
+          "unified_diff",
+          "Applying removed line virtual text at line",
+          attach_line,
+          "new_line_idx:",
+          new_line_idx,
+          "content:",
+          line.content,
+          "buf_line_count:",
+          buf_line_count
+        )
+
+        -- Always show above the attachment line
+        vim.api.nvim_buf_set_extmark(buf, ns_id, attach_line, 0, {
+          virt_lines = { { { line.content, "DiffDelete" } } },
+          virt_lines_above = true,
+          -- Removed sign_text as it appears on wrong line with virtual text
+        })
+        table.insert(change_lines, attach_line + 1) -- 1-indexed for navigation
+
         -- Don't increment new_line_idx for removed lines
       elseif line.type == "context" then
         -- Context line - just move forward
         new_line_idx = new_line_idx + 1
       end
     end
+  end
+
+  -- Apply topfill workaround if we have deletions at the beginning
+  if has_deletion_at_start then
+    -- Create an autocmd group for this buffer
+    local augroup = vim.api.nvim_create_augroup("ClaudeCodeUnifiedDiffTopfill_" .. buf, { clear = true })
+
+    -- Set topfill for virtual text above first line
+    local topfill = deleted_lines_at_start
+
+    -- Apply topfill in the next tick to ensure window is ready
+    vim.schedule(function()
+      local win = vim.fn.bufwinid(buf)
+      if win > 0 then
+        vim.fn.win_execute(win, "lua vim.fn.winrestview({ topfill = " .. topfill .. " })")
+
+        -- Set up autocmd to maintain topfill on cursor movement
+        vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+          group = augroup,
+          buffer = buf,
+          callback = function()
+            local current_win = vim.fn.bufwinid(buf)
+            if current_win > 0 then
+              vim.fn.win_execute(current_win, "lua vim.fn.winrestview({ topfill = " .. topfill .. " })")
+            end
+          end,
+        })
+      end
+    end)
   end
 
   return change_lines
@@ -240,8 +323,14 @@ end
 -- @return table Result with success status and buffer info
 function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, tab_name, target_window)
   logger.debug("unified_diff", "open_unified_diff called for", old_file_path)
-  logger.debug("unified_diff", "new_file_contents length:", #new_file_contents, "ends with newline:", new_file_contents:sub(-1) == "\n")
-  
+  logger.debug(
+    "unified_diff",
+    "new_file_contents length:",
+    #new_file_contents,
+    "ends with newline:",
+    new_file_contents:sub(-1) == "\n"
+  )
+
   -- Create buffer with NEW file content (so it's fully editable)
   local buf = vim.api.nvim_create_buf(false, true)
   local new_lines = vim.split(new_file_contents, "\n")
@@ -249,7 +338,7 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
   if #new_lines > 0 then
     logger.debug("unified_diff", "Last line is empty:", new_lines[#new_lines] == "")
   end
-  
+
   -- vim.split adds empty string at end if content ends with \n
   -- Remove it to match how Neovim handles file content
   if #new_lines > 0 and new_lines[#new_lines] == "" then
@@ -265,17 +354,19 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
     vim.api.nvim_set_option_value("filetype", ft, { buf = buf })
   end
 
-  -- Set buffer properties
-  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+  -- Set buffer properties (use acwrite to allow :w like split mode)
+  vim.api.nvim_set_option_value("buftype", "acwrite", { buf = buf })
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = buf })
   vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
+  vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
 
   -- Generate diff and apply highlighting
   local diff_output = generate_unified_diff(old_file_path, new_file_contents)
   local change_lines = {}
+  local hunks = {}
 
   if diff_output and diff_output ~= "" then
-    local hunks = parse_unified_diff(diff_output)
+    hunks = parse_unified_diff(diff_output)
     change_lines = apply_unified_diff_highlighting(buf, hunks)
   end
 
@@ -293,11 +384,13 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
   -- Navigate to first change
   navigate_to_first_change(buf, change_lines)
 
-  -- Store diff context for cleanup
+  -- Store diff context for cleanup and user commands
   vim.b[buf].claudecode_diff_tab_name = tab_name
+  vim.b[buf].claudecode_diff_new_win = target_window -- For unified mode, new_win is the same as target_window
   vim.b[buf].claudecode_diff_target_win = target_window
 
   logger.debug("unified_diff", "Created unified diff for", old_file_path, "with", #change_lines, "changes")
+  logger.debug("unified_diff", "Parsed", #hunks, "hunks from diff output")
 
   return {
     success = true,
@@ -315,6 +408,8 @@ end
 function M.cleanup_unified_diff(buf)
   if vim.api.nvim_buf_is_valid(buf) then
     vim.api.nvim_buf_clear_namespace(buf, ns_id, 0, -1)
+    -- Clean up topfill autocmd group
+    pcall(vim.api.nvim_del_augroup_by_name, "ClaudeCodeUnifiedDiffTopfill_" .. buf)
   end
 end
 
