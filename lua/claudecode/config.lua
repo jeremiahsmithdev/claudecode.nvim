@@ -13,6 +13,7 @@ M.defaults = {
   connection_wait_delay = 200, -- Milliseconds to wait after connection before sending queued @ mentions
   connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
   queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
+  follow_file_changes = false, -- Navigate to files after Claude opens or edits them
   diff_opts = {
     auto_close_on_accept = true,
     show_diff_stats = true,
@@ -79,6 +80,8 @@ function M.validate(config)
   )
 
   assert(type(config.queue_timeout) == "number" and config.queue_timeout > 0, "queue_timeout must be a positive number")
+
+  assert(type(config.follow_file_changes) == "boolean", "follow_file_changes must be a boolean")
 
   assert(type(config.diff_opts) == "table", "diff_opts must be a table")
   assert(type(config.diff_opts.auto_close_on_accept) == "boolean", "diff_opts.auto_close_on_accept must be a boolean")

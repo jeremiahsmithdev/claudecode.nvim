@@ -43,6 +43,7 @@ M.version = {
 --- @field connection_wait_delay number Milliseconds to wait after connection before sending queued @ mentions.
 --- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
 --- @field queue_timeout number Maximum time to keep @ mentions in queue (milliseconds).
+--- @field follow_file_changes boolean Navigate to files after Claude opens or edits them.
 --- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean } Options for the diff provider.
 --- @field tmux_cleanup_lockfiles boolean Clean up other lockfiles with current working directory when starting in tmux mode.
 
@@ -1049,6 +1050,18 @@ function M._create_commands()
     desc = "Deny/reject the current diff changes",
   })
 
+  vim.api.nvim_create_user_command("ClaudeCodeToggleFollowChanges", function()
+    if M.state.config then
+      M.state.config.follow_file_changes = not M.state.config.follow_file_changes
+      local status = M.state.config.follow_file_changes and "enabled" or "disabled"
+      logger.info("command", "Claude Code follow file changes " .. status)
+    else
+      logger.warn("command", "Claude Code not initialized")
+    end
+  end, {
+    desc = "Toggle auto-navigation to files after Claude edits them",
+  })
+
   vim.api.nvim_create_user_command("ClaudeCodeShowLog", function()
     local log_path = logger.get_log_file_path()
     if log_path then
@@ -1304,6 +1317,22 @@ function M._add_paths_to_claude(file_paths, options)
   end
 
   return success_count, total_count
+end
+
+--- Get the current plugin configuration
+---@return ClaudeCode.Config The current configuration
+function M.get_config()
+  return M.state.config
+end
+
+--- Navigate to a file after Claude makes changes (for follow_file_changes feature)
+--- @param file_path string Path to the file to navigate to
+--- @param cursor_pos table|nil Optional cursor position {row, col}
+function M.navigate_to_file_after_change(file_path, cursor_pos)
+  if M.state.config and M.state.config.follow_file_changes then
+    local diff = require("claudecode.diff")
+    diff._navigate_to_file_after_change(file_path, cursor_pos)
+  end
 end
 
 return M
