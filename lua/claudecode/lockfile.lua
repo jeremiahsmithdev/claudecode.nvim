@@ -312,14 +312,14 @@ function M.cleanup_lockfiles_with_current_cwd()
 
   -- Get all .lock files in the directory
   local lock_files = vim.fn.glob(M.lock_dir .. "/*.lock", false, true)
-  
+
   for _, lock_path in ipairs(lock_files) do
     -- Try to read and parse the lockfile
     local file = io.open(lock_path, "r")
     if file then
       local content = file:read("*all")
       file:close()
-      
+
       if content and content ~= "" then
         local ok, lock_data = pcall(vim.json.decode, content)
         if ok and type(lock_data) == "table" and lock_data.workspaceFolders then
@@ -334,10 +334,16 @@ function M.cleanup_lockfiles_with_current_cwd()
                 local remove_ok, remove_err = pcall(function()
                   return os.remove(lock_path)
                 end)
-                
+
                 if remove_ok then
                   cleaned_count = cleaned_count + 1
-                  logger.debug("lockfile", "Removed lockfile with matching workspace (PID " .. (lock_data.pid or "unknown") .. "): " .. lock_path)
+                  logger.debug(
+                    "lockfile",
+                    "Removed lockfile with matching workspace (PID "
+                      .. (lock_data.pid or "unknown")
+                      .. "): "
+                      .. lock_path
+                  )
                   break -- Found match, no need to check other workspace folders
                 else
                   local error_msg = "Failed to remove " .. lock_path .. ": " .. (remove_err or "unknown error")
@@ -381,14 +387,14 @@ function M.get_lockfile_for_current_pid()
 
   -- Get all .lock files in the directory
   local lock_files = vim.fn.glob(M.lock_dir .. "/*.lock", false, true)
-  
+
   for _, lock_path in ipairs(lock_files) do
     -- Try to read and parse the lockfile
     local file = io.open(lock_path, "r")
     if file then
       local content = file:read("*all")
       file:close()
-      
+
       if content and content ~= "" then
         local ok, lock_data = pcall(vim.json.decode, content)
         if ok and type(lock_data) == "table" and lock_data.pid == current_pid then

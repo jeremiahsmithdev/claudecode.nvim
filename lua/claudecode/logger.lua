@@ -29,14 +29,15 @@ function M.setup(plugin_config)
 
   -- Set file log level
   current_log_level_value = (conf and conf.log_level and level_values[conf.log_level]) or M.levels.INFO
-  
+
   -- Set notify log level (defaults to same as log_level if not specified)
-  current_notify_log_level_value = (conf and conf.notify_log_level and level_values[conf.notify_log_level]) or current_log_level_value
-  
+  current_notify_log_level_value = (conf and conf.notify_log_level and level_values[conf.notify_log_level])
+    or current_log_level_value
+
   -- Set up file logging
   log_file_path = vim.fn.stdpath("cache") .. "/claudecode.log"
   log_to_file = true
-  
+
   -- Clear log file on setup
   local file = io.open(log_file_path, "w")
   if file then

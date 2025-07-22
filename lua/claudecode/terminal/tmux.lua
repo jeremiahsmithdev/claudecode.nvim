@@ -111,7 +111,6 @@ function M.open(cmd_string, env_table, effective_config, focus)
     return
   end
 
-
   if get_active_pane_id() then
     logger.debug("terminal", "Claude tmux pane already exists, focusing existing pane")
     if focus ~= false then
