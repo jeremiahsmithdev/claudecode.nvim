@@ -5,6 +5,84 @@ local logger = require("claudecode.logger")
 local utils = require("claudecode.utils")
 local window_utils = require("claudecode.utils.window")
 
+--- Count additions and deletions by comparing two buffers
+-- @param original_buf number Original buffer
+-- @param new_buf number New buffer
+-- @return table {additions: number, deletions: number}
+local function count_buffer_changes(original_buf, new_buf)
+  local additions = 0
+  local deletions = 0
+
+  if not vim.api.nvim_buf_is_valid(original_buf) or not vim.api.nvim_buf_is_valid(new_buf) then
+    return { additions = 0, deletions = 0 }
+  end
+
+  local original_lines = vim.api.nvim_buf_get_lines(original_buf, 0, -1, false)
+  local new_lines = vim.api.nvim_buf_get_lines(new_buf, 0, -1, false)
+
+  -- Simple line-by-line comparison for now
+  -- This won't be as accurate as a proper diff algorithm, but gives a reasonable approximation
+  local min_lines = math.min(#original_lines, #new_lines)
+
+  -- Count changed lines in common section
+  for i = 1, min_lines do
+    if original_lines[i] ~= new_lines[i] then
+      additions = additions + 1
+      deletions = deletions + 1
+    end
+  end
+
+  -- Count added/removed lines
+  if #new_lines > #original_lines then
+    additions = additions + (#new_lines - #original_lines)
+  elseif #original_lines > #new_lines then
+    deletions = deletions + (#original_lines - #new_lines)
+  end
+
+  return { additions = additions, deletions = deletions }
+end
+
+--- Format GitHub-style winbar content
+-- @param changes table {additions: number, deletions: number}
+-- @param filename string Name of the file being diffed
+-- @return string Formatted winbar content
+local function format_diff_winbar(changes, filename)
+  local parts = {}
+
+  if changes.additions > 0 then
+    table.insert(parts, string.format("%%#DiffAdd#+%d%%*", changes.additions))
+  end
+
+  if changes.deletions > 0 then
+    table.insert(parts, string.format("%%#DiffDelete#-%d%%*", changes.deletions))
+  end
+
+  local changes_text
+  if #parts == 0 then
+    changes_text = "No changes"
+  else
+    changes_text = table.concat(parts, " ")
+  end
+
+  -- Format: Claude Code - filename | +N -N lines to be changed (centered)
+  local basename = vim.fn.fnamemodify(filename, ":t")
+  local content = string.format("Claude Code - %s | %s lines to be changed", basename, changes_text)
+  return string.format("%%=%s%%=", content)
+end
+
+--- Set winbar for diff display
+-- @param win number Window handle
+-- @param changes table {additions: number, deletions: number}
+-- @param filename string Name of the file being diffed
+local function set_diff_winbar(win, changes, filename)
+  if not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  local winbar_content = format_diff_winbar(changes, filename)
+  vim.api.nvim_set_option_value("winbar", winbar_content, { win = win })
+end
+
 --- Open native diff view (simple split mode implementation)
 -- @param old_file_path string Path to the original file
 -- @param new_file_path string Path to the new file (used for naming)
@@ -213,10 +291,26 @@ function M.create_diff_view_from_window(
     vim.cmd("wincmd =")
     vim.api.nvim_set_current_win(new_win)
 
+    -- Set absolute line numbering for both diff windows
+    if vim.api.nvim_win_is_valid(target_window) then
+      vim.api.nvim_set_option_value("number", true, { win = target_window })
+      vim.api.nvim_set_option_value("relativenumber", false, { win = target_window })
+    end
+    if vim.api.nvim_win_is_valid(new_win) then
+      vim.api.nvim_set_option_value("number", true, { win = new_win })
+      vim.api.nvim_set_option_value("relativenumber", false, { win = new_win })
+    end
+
     -- Store diff context in buffer variables for user commands
     vim.b[new_buffer].claudecode_diff_tab_name = tab_name
     vim.b[new_buffer].claudecode_diff_new_win = new_win
     vim.b[new_buffer].claudecode_diff_target_win = target_window
+
+    -- Set up GitHub-style winbar with diff statistics
+    local changes = count_buffer_changes(original_buffer, new_buffer)
+    set_diff_winbar(target_window, changes, old_file_path)
+    set_diff_winbar(new_win, changes, old_file_path)
+    logger.debug("modes", "Set split diff winbar with", changes.additions, "additions and", changes.deletions, "deletions")
 
     -- Set diff_info for split mode
     diff_info = {

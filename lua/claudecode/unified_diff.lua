@@ -300,6 +300,67 @@ local function setup_unified_diff_folding(buf, change_lines, config)
   end
 end
 
+--- Count additions and deletions from parsed hunks
+-- @param hunks table Array of hunks with lines
+-- @return table {additions: number, deletions: number}
+local function count_diff_changes(hunks)
+  local additions = 0
+  local deletions = 0
+
+  for _, hunk in ipairs(hunks) do
+    for _, line in ipairs(hunk.lines) do
+      if line.type == "add" then
+        additions = additions + 1
+      elseif line.type == "remove" then
+        deletions = deletions + 1
+      end
+    end
+  end
+
+  return { additions = additions, deletions = deletions }
+end
+
+--- Format GitHub-style winbar content
+-- @param changes table {additions: number, deletions: number}
+-- @param filename string Name of the file being diffed
+-- @return string Formatted winbar content
+local function format_diff_winbar(changes, filename)
+  local parts = {}
+
+  if changes.additions > 0 then
+    table.insert(parts, string.format("%%#DiffAdd#+%d%%*", changes.additions))
+  end
+
+  if changes.deletions > 0 then
+    table.insert(parts, string.format("%%#DiffDelete#-%d%%*", changes.deletions))
+  end
+
+  local changes_text
+  if #parts == 0 then
+    changes_text = "No changes"
+  else
+    changes_text = table.concat(parts, " ")
+  end
+
+  -- Format: Claude Code - filename | +N -N lines to be changed (centered)
+  local basename = vim.fn.fnamemodify(filename, ":t")
+  local content = string.format("Claude Code - %s | %s lines to be changed", basename, changes_text)
+  return string.format("%%=%s%%=", content)
+end
+
+--- Set winbar for diff display
+-- @param win number Window handle
+-- @param changes table {additions: number, deletions: number}
+-- @param filename string Name of the file being diffed
+local function set_diff_winbar(win, changes, filename)
+  if not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  local winbar_content = format_diff_winbar(changes, filename)
+  vim.api.nvim_set_option_value("winbar", winbar_content, { win = win })
+end
+
 --- Navigate to first change (like split diff does)
 -- @param buf number Buffer handle
 -- @param change_lines table Array of change line numbers
@@ -387,6 +448,12 @@ function M.open_unified_diff(
   vim.api.nvim_set_option_value("swapfile", false, { buf = buf })
   vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
 
+  -- Set absolute line numbering for diff buffer
+  if target_window and vim.api.nvim_win_is_valid(target_window) then
+    vim.api.nvim_set_option_value("number", true, { win = target_window })
+    vim.api.nvim_set_option_value("relativenumber", false, { win = target_window })
+  end
+
   -- Generate diff and apply highlighting
   local diff_output = generate_unified_diff(old_file_path, new_file_contents)
   local change_lines = {}
@@ -410,6 +477,13 @@ function M.open_unified_diff(
 
   -- Navigate to first change
   navigate_to_first_change(buf, change_lines)
+
+  -- Set up GitHub-style winbar with diff statistics
+  if target_window and vim.api.nvim_win_is_valid(target_window) then
+    local changes = count_diff_changes(hunks)
+    set_diff_winbar(target_window, changes, old_file_path)
+    logger.debug("unified_diff", "Set winbar with", changes.additions, "additions and", changes.deletions, "deletions")
+  end
 
   -- Store diff context for cleanup and user commands
   vim.b[buf].claudecode_diff_tab_name = tab_name

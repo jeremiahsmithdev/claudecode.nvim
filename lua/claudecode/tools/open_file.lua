@@ -32,6 +32,8 @@ local schema = {
   },
 }
 
+local utils = require("claudecode.utils")
+
 --- Handles the openFile tool invocation.
 -- Opens a file in the editor with optional selection.
 -- @param params table The input parameters for the tool.
@@ -42,55 +44,6 @@ local schema = {
 -- @field params.endText string (Optional) Text pattern to end selection.
 -- @return table A table with a message indicating success.
 -- @error table A table with code, message, and data for JSON-RPC error if failed.
---- Finds a suitable main editor window to open files in.
--- Excludes terminals, sidebars, and floating windows.
--- @return number|nil Window ID of the main editor window, or nil if not found
-local function find_main_editor_window()
-  local windows = vim.api.nvim_list_wins()
-
-  for _, win in ipairs(windows) do
-    local buf = vim.api.nvim_win_get_buf(win)
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-    local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
-    local win_config = vim.api.nvim_win_get_config(win)
-
-    -- Check if this is a suitable window
-    local is_suitable = true
-
-    -- Skip floating windows
-    if win_config.relative and win_config.relative ~= "" then
-      is_suitable = false
-    end
-
-    -- Skip special buffer types
-    if is_suitable and (buftype == "terminal" or buftype == "nofile" or buftype == "prompt") then
-      is_suitable = false
-    end
-
-    -- Skip known sidebar filetypes
-    if
-      is_suitable
-      and (
-        filetype == "neo-tree"
-        or filetype == "neo-tree-popup"
-        or filetype == "ClaudeCode"
-        or filetype == "NvimTree"
-        or filetype == "oil"
-        or filetype == "aerial"
-        or filetype == "tagbar"
-      )
-    then
-      is_suitable = false
-    end
-
-    -- This looks like a main editor window
-    if is_suitable then
-      return win
-    end
-  end
-
-  return nil
-end
 
 local function handler(params)
   if not params.filePath then
@@ -105,7 +58,7 @@ local function handler(params)
   end
 
   -- Find the main editor window
-  local target_win = find_main_editor_window()
+  local target_win = utils.find_main_editor_window()
 
   if target_win then
     -- Open file in the target window
