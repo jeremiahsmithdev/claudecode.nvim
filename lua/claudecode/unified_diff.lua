@@ -31,9 +31,7 @@ local function parse_unified_diff(diff_output)
       logger.debug("unified_diff", "Found hunk: old", old_start, old_count, "new", new_start, new_count)
     elseif current_hunk then
       -- Skip "No newline at end of file" markers
-      if line:match("^\\ No newline at end of file") then
-        -- Skip this line
-      else
+      if not line:match("^\\ No newline at end of file") then
         -- Parse diff line content
         local prefix = line:sub(1, 1)
         if prefix == "+" or prefix == "-" or prefix == " " then
@@ -322,8 +320,17 @@ end
 -- @param tab_name string Name for the diff tab/view
 -- @param target_window number Window to display the diff in
 -- @param config table Configuration options including diff_opts.lines_before_fold
+-- @param is_new_file boolean Whether this is a new file (doesn't exist yet)
 -- @return table Result with success status and buffer info
-function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, tab_name, target_window, config)
+function M.open_unified_diff(
+  old_file_path,
+  new_file_path,
+  new_file_contents,
+  tab_name,
+  target_window,
+  config,
+  is_new_file
+)
   logger.debug("unified_diff", "open_unified_diff called for", old_file_path)
   logger.debug(
     "unified_diff",
@@ -333,8 +340,24 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
     new_file_contents:sub(-1) == "\n"
   )
 
-  -- Create buffer with NEW file content (so it's fully editable)
-  local buf = vim.api.nvim_create_buf(false, true)
+  -- Determine buffer name first
+  local buffer_name = is_new_file and (old_file_path .. " (NEW FILE)") or (old_file_path .. " (diff)")
+
+  -- Check if buffer already exists and reuse it
+  local existing_bufnr = vim.fn.bufnr(buffer_name)
+  local buf
+  if existing_bufnr ~= -1 and vim.api.nvim_buf_is_valid(existing_bufnr) then
+    logger.debug("unified_diff", "Reusing existing buffer:", buffer_name)
+    buf = existing_bufnr
+    -- Ensure buffer is modifiable when reusing
+    vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
+  else
+    logger.debug("unified_diff", "Creating new buffer:", buffer_name)
+    buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(buf, buffer_name)
+  end
+
+  -- Populate buffer with NEW file content (so it's fully editable)
   local new_lines = vim.split(new_file_contents, "\n")
   logger.debug("unified_diff", "vim.split produced", #new_lines, "lines")
   if #new_lines > 0 then
@@ -347,8 +370,10 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
     logger.debug("unified_diff", "Removing empty last line")
     table.remove(new_lines, #new_lines)
   end
+
+  -- Ensure buffer is modifiable before setting content
+  vim.api.nvim_set_option_value("modifiable", true, { buf = buf })
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
-  vim.api.nvim_buf_set_name(buf, old_file_path .. " (diff)")
 
   -- Detect and set original filetype for syntax highlighting
   local ft = vim.filetype and vim.filetype.match({ filename = old_file_path }) or ""

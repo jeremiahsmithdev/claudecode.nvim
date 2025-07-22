@@ -3,6 +3,8 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
+local window_utils = require("claudecode.utils.window")
 
 -- Global state management for active diffs
 local active_diffs = {}
@@ -14,57 +16,6 @@ local function get_autocmd_group()
     autocmd_group = vim.api.nvim_create_augroup("ClaudeCodeMCPDiff", { clear = true })
   end
   return autocmd_group
-end
-
---- Find a suitable main editor window to open diffs in.
--- Excludes terminals, sidebars, and floating windows.
--- @return number|nil Window ID of the main editor window, or nil if not found
-local function find_main_editor_window()
-  local windows = vim.api.nvim_list_wins()
-
-  for _, win in ipairs(windows) do
-    local buf = vim.api.nvim_win_get_buf(win)
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-    local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
-    local win_config = vim.api.nvim_win_get_config(win)
-
-    -- Evaluate window suitability for main editor usage
-    -- Check if this is a suitable window
-    local is_suitable = true
-
-    -- Skip floating windows
-    if win_config.relative and win_config.relative ~= "" then
-      is_suitable = false
-    end
-
-    -- Skip special buffer types
-    if is_suitable and (buftype == "terminal" or buftype == "prompt") then
-      is_suitable = false
-    end
-
-    -- Skip known sidebar filetypes and ClaudeCode terminal
-    if
-      is_suitable
-      and (
-        filetype == "neo-tree"
-        or filetype == "neo-tree-popup"
-        or filetype == "ClaudeCode"
-        or filetype == "NvimTree"
-        or filetype == "oil"
-        or filetype == "aerial"
-        or filetype == "tagbar"
-      )
-    then
-      is_suitable = false
-    end
-
-    -- This looks like a main editor window
-    if is_suitable then
-      return win
-    end
-  end
-
-  return nil
 end
 
 --- Setup the diff module
@@ -84,146 +35,6 @@ function M.open_diff(old_file_path, new_file_path, new_file_contents, tab_name)
   return M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
 end
 
---- Create a temporary file with content
--- @param content string The content to write
--- @param filename string Base filename for the temporary file
--- @return string|nil, string|nil The temporary file path and error message
-local function create_temp_file(content, filename)
-  local base_dir_cache = vim.fn.stdpath("cache") .. "/claudecode_diffs"
-  local mkdir_ok_cache, mkdir_err_cache = pcall(vim.fn.mkdir, base_dir_cache, "p")
-
-  local final_base_dir
-  if mkdir_ok_cache then
-    final_base_dir = base_dir_cache
-  else
-    local base_dir_temp = vim.fn.stdpath("cache") .. "/claudecode_diffs_fallback"
-    local mkdir_ok_temp, mkdir_err_temp = pcall(vim.fn.mkdir, base_dir_temp, "p")
-    if not mkdir_ok_temp then
-      local err_to_report = mkdir_err_temp or mkdir_err_cache or "unknown error creating base temp dir"
-      return nil, "Failed to create base temporary directory: " .. tostring(err_to_report)
-    end
-    final_base_dir = base_dir_temp
-  end
-
-  local session_id_base = vim.fn.fnamemodify(vim.fn.tempname(), ":t")
-    .. "_"
-    .. tostring(os.time())
-    .. "_"
-    .. tostring(math.random(1000, 9999))
-  local session_id = session_id_base:gsub("[^A-Za-z0-9_-]", "")
-  if session_id == "" then -- Fallback if all characters were problematic, ensuring a directory can be made.
-    session_id = "claudecode_session"
-  end
-
-  local tmp_session_dir = final_base_dir .. "/" .. session_id
-  local mkdir_session_ok, mkdir_session_err = pcall(vim.fn.mkdir, tmp_session_dir, "p")
-  if not mkdir_session_ok then
-    return nil, "Failed to create temporary session directory: " .. tostring(mkdir_session_err)
-  end
-
-  local tmp_file = tmp_session_dir .. "/" .. filename
-  local file = io.open(tmp_file, "w")
-  if not file then
-    return nil, "Failed to create temporary file: " .. tmp_file
-  end
-
-  file:write(content)
-  file:close()
-
-  return tmp_file, nil
-end
-
---- Clean up temporary files and directories
--- @param tmp_file string Path to the temporary file to clean up
-local function cleanup_temp_file(tmp_file)
-  if tmp_file and vim.fn.filereadable(tmp_file) == 1 then
-    local tmp_dir = vim.fn.fnamemodify(tmp_file, ":h")
-    if vim.fs and type(vim.fs.remove) == "function" then
-      local ok_file, err_file = pcall(vim.fs.remove, tmp_file)
-      if not ok_file then
-        vim.notify(
-          "ClaudeCode: Error removing temp file " .. tmp_file .. ": " .. tostring(err_file),
-          vim.log.levels.WARN
-        )
-      end
-
-      local ok_dir, err_dir = pcall(vim.fs.remove, tmp_dir)
-      if not ok_dir then
-        vim.notify(
-          "ClaudeCode: Error removing temp directory " .. tmp_dir .. ": " .. tostring(err_dir),
-          vim.log.levels.INFO
-        )
-      end
-    else
-      local reason = "vim.fs.remove is not a function"
-      if not vim.fs then
-        reason = "vim.fs is nil"
-      end
-      vim.notify(
-        "ClaudeCode: Cannot perform standard cleanup: "
-          .. reason
-          .. ". Affected file: "
-          .. tmp_file
-          .. ". Please check your Neovim setup or report this issue.",
-        vim.log.levels.ERROR
-      )
-      -- Fallback to os.remove for the file.
-      local os_ok, os_err = pcall(os.remove, tmp_file)
-      if not os_ok then
-        vim.notify(
-          "ClaudeCode: Fallback os.remove also failed for file " .. tmp_file .. ": " .. tostring(os_err),
-          vim.log.levels.ERROR
-        )
-      end
-    end
-  end
-end
-
--- Detect filetype from a path or existing buffer (best-effort)
-local function detect_filetype(path, buf)
-  -- 1) Try Neovim's builtin matcher if available (>=0.10)
-  if vim.filetype and type(vim.filetype.match) == "function" then
-    local ok, ft = pcall(vim.filetype.match, { filename = path })
-    if ok and ft and ft ~= "" then
-      return ft
-    end
-  end
-
-  -- 2) Try reading from existing buffer
-  if buf and vim.api.nvim_buf_is_valid(buf) then
-    local ft = vim.api.nvim_buf_get_option(buf, "filetype")
-    if ft and ft ~= "" then
-      return ft
-    end
-  end
-
-  -- 3) Fallback to simple extension mapping
-  local ext = path:match("%.([%w_%-]+)$") or ""
-  local simple_map = {
-    lua = "lua",
-    ts = "typescript",
-    js = "javascript",
-    jsx = "javascriptreact",
-    tsx = "typescriptreact",
-    py = "python",
-    go = "go",
-    rs = "rust",
-    c = "c",
-    h = "c",
-    cpp = "cpp",
-    hpp = "cpp",
-    md = "markdown",
-    sh = "sh",
-    zsh = "zsh",
-    bash = "bash",
-    json = "json",
-    yaml = "yaml",
-    yml = "yaml",
-    toml = "toml",
-  }
-  return simple_map[ext]
-end
-
 --- Open diff using native Neovim functionality
 -- @param old_file_path string Path to the original file
 -- @param new_file_path string Path to the new file (used for naming)
@@ -233,12 +44,12 @@ end
 function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
   -- Note: unified mode is handled in _create_diff_view_from_window
   local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
-  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
+  local tmp_file, err = utils.create_temp_file(new_file_contents, new_filename)
   if not tmp_file then
     return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
   end
 
-  local target_win = find_main_editor_window()
+  local target_win = window_utils.find_main_editor_window()
 
   if target_win then
     vim.api.nvim_set_current_win(target_win)
@@ -261,7 +72,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
   local proposed_buf = vim.api.nvim_get_current_buf()
-  local old_filetype = detect_filetype(old_file_path)
+  local old_filetype = utils.detect_filetype(old_file_path)
   if old_filetype and old_filetype ~= "" then
     vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })
   end
@@ -280,7 +91,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     group = cleanup_group,
     buffer = new_buf,
     callback = function()
-      cleanup_temp_file(tmp_file)
+      utils.cleanup_temp_file(tmp_file)
     end,
     once = true,
   })
@@ -358,14 +169,17 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   local current_diff_data = active_diffs[tab_name]
   local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
   local follow_file_changes = require("claudecode.follow_file_changes")
-  
+
   -- Use immediate navigation (no delay)
-  follow_file_changes.handle_file_change(diff_data.old_file_path, diff_cursor_pos or original_cursor_pos, original_cursor_pos)
+  follow_file_changes.handle_file_change(
+    diff_data.old_file_path,
+    diff_cursor_pos or original_cursor_pos,
+    original_cursor_pos
+  )
 
   -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
   logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
 end
-
 
 --- Resolve diff as rejected (user closed/rejected)
 -- @param tab_name string The diff identifier
@@ -556,7 +370,8 @@ function M._create_diff_view_from_window(
       new_content,
       tab_name,
       target_window,
-      main_module.state.config -- Pass config for lines_before_fold setting
+      main_module.state.config, -- Pass config for lines_before_fold setting
+      is_new_file -- Pass new file information for proper buffer naming
     )
 
     if result.success then
@@ -583,7 +398,7 @@ function M._create_diff_view_from_window(
     vim.api.nvim_win_set_buf(new_win, new_buffer)
 
     -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
-    local original_ft = detect_filetype(old_file_path, original_buffer)
+    local original_ft = utils.detect_filetype(old_file_path, original_buffer)
     if original_ft and original_ft ~= "" then
       vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
     end
@@ -631,9 +446,15 @@ function M._cleanup_diff_state(tab_name, reason)
     end
   end
 
-  -- Clean up the new buffer only (not the old buffer which is the user's file)
+  -- Clean up the new buffer (proposed changes)
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
     pcall(vim.api.nvim_buf_delete, diff_data.new_buffer, { force = true })
+  end
+
+  -- For new files, also clean up the original "(NEW FILE)" buffer
+  if diff_data.is_new_file and diff_data.original_buffer and vim.api.nvim_buf_is_valid(diff_data.original_buffer) then
+    logger.debug("diff", "Cleaning up (NEW FILE) buffer for new file:", diff_data.old_file_path)
+    pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
   end
 
   -- Close new diff window if still open
@@ -705,7 +526,7 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     -- If no existing buffer/window, find a suitable main editor window
     if not target_window then
-      target_window = find_main_editor_window()
+      target_window = window_utils.find_main_editor_window()
     end
 
     -- Step 3: Create scratch buffer for new content
@@ -889,7 +710,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 function M._mark_diff_as_externally_saved(file_path)
   local follow_file_changes = require("claudecode.follow_file_changes")
   follow_file_changes.mark_file_as_externally_saved(file_path)
-  
+
   -- Find diff by file path and mark as saved
   for tab_name, diff_data in pairs(active_diffs) do
     if diff_data.old_file_path == file_path and diff_data.status == "pending" then
@@ -915,7 +736,11 @@ function M.close_diff_by_tab_name(tab_name)
     -- Claude Code CLI has written the file
     if diff_data.old_file_path then
       local follow_file_changes = require("claudecode.follow_file_changes")
-      follow_file_changes.handle_file_change(diff_data.old_file_path, diff_data.original_cursor_pos, diff_data.original_cursor_pos)
+      follow_file_changes.handle_file_change(
+        diff_data.old_file_path,
+        diff_data.original_cursor_pos,
+        diff_data.original_cursor_pos
+      )
     end
     M._cleanup_diff_state(tab_name, "diff tab closed after save")
     return true
@@ -924,34 +749,38 @@ function M.close_diff_by_tab_name(tab_name)
   -- If still pending, check if Claude has already marked it as saved via saveDocument
   if diff_data.status == "pending" then
     local follow_file_changes = require("claudecode.follow_file_changes")
-    
+
     -- Check if the diff was already marked as externally saved by saveDocument
     if follow_file_changes.check_and_clear_external_save_flag(diff_data.old_file_path) then
-      logger.debug("diff", "Diff was already marked as externally saved - treating as accepted", diff_data.old_file_path)
+      logger.debug(
+        "diff",
+        "Diff was already marked as externally saved - treating as accepted",
+        diff_data.old_file_path
+      )
       diff_data.status = "saved"
-      
+
       -- Get cursor position from diff view if available
       local cursor_pos = diff_data.original_cursor_pos
       if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
         cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
       end
-      
+
       -- Handle file change immediately (no delay)
       follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos)
-      
+
       M._cleanup_diff_state(tab_name, "diff tab closed after external save via saveDocument")
       return true
     end
-    
+
     -- No external save flag set - check file modification as fallback
     logger.debug("diff", "No external save flag set - checking file modification as fallback")
-    
+
     -- Get cursor position from diff view if available
     local cursor_pos = diff_data.original_cursor_pos
     if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
       cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
     end
-    
+
     -- Use the new follow_file_changes module for timing-based detection
     follow_file_changes.handle_file_change_with_timing_check(
       diff_data.old_file_path,
@@ -969,13 +798,12 @@ function M.close_diff_by_tab_name(tab_name)
         end
       end
     )
-    
+
     return true
   end
 
   return false
 end
-
 
 -- Test helper function (only for testing)
 function M._get_active_diffs()
