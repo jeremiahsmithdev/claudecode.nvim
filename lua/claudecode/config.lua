@@ -20,6 +20,7 @@ M.defaults = {
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
     diff_mode = "split", -- "split" or "unified"
+    lines_before_fold = 4, -- Number of lines to show before folding context
   },
   tmux_cleanup_lockfiles = false, -- Clean up other lockfiles with current working directory when starting in tmux mode
 }
@@ -98,6 +99,11 @@ function M.validate(config)
     end
   end
   assert(is_valid_diff_mode, "diff_opts.diff_mode must be one of: " .. table.concat(valid_diff_modes, ", "))
+
+  assert(
+    type(config.diff_opts.lines_before_fold) == "number" and config.diff_opts.lines_before_fold >= 0,
+    "diff_opts.lines_before_fold must be a non-negative number"
+  )
 
   assert(type(config.tmux_cleanup_lockfiles) == "boolean", "tmux_cleanup_lockfiles must be a boolean")
 

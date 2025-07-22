@@ -264,7 +264,8 @@ end
 --- Set up basic folding for unchanged sections (simplified version of split diff)
 -- @param buf number Buffer handle
 -- @param change_lines table Array of line numbers with changes
-local function setup_unified_diff_folding(buf, change_lines)
+-- @param config table Configuration options including lines_before_fold
+local function setup_unified_diff_folding(buf, change_lines, config)
   if #change_lines == 0 then
     return
   end
@@ -274,7 +275,7 @@ local function setup_unified_diff_folding(buf, change_lines)
   vim.api.nvim_set_option_value("foldmethod", "manual", { win = 0 })
 
   local buf_line_count = vim.api.nvim_buf_line_count(buf)
-  local context = 3 -- Lines of context around changes
+  local context = config and config.diff_opts and config.diff_opts.lines_before_fold or 4 -- Configurable lines of context around changes
 
   -- Create folds for sections without changes
   local last_change_end = 1
@@ -320,8 +321,9 @@ end
 -- @param new_file_contents string Contents of the new file
 -- @param tab_name string Name for the diff tab/view
 -- @param target_window number Window to display the diff in
+-- @param config table Configuration options including diff_opts.lines_before_fold
 -- @return table Result with success status and buffer info
-function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, tab_name, target_window)
+function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, tab_name, target_window, config)
   logger.debug("unified_diff", "open_unified_diff called for", old_file_path)
   logger.debug(
     "unified_diff",
@@ -377,7 +379,7 @@ function M.open_unified_diff(old_file_path, new_file_path, new_file_contents, ta
 
     -- Set up folding and navigation (split diff features) after buffer is in window
     if change_lines then
-      setup_unified_diff_folding(buf, change_lines)
+      setup_unified_diff_folding(buf, change_lines, config)
     end
   end
 

@@ -28,6 +28,7 @@ local function find_main_editor_window()
     local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
     local win_config = vim.api.nvim_win_get_config(win)
 
+    -- Evaluate window suitability for main editor usage
     -- Check if this is a suitable window
     local is_suitable = true
 
@@ -353,74 +354,18 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     logger.debug("diff", "No resolution callback found for saved diff", tab_name)
   end
 
-  -- Reload the original file buffer after a delay to ensure Claude CLI has written the file
-  vim.defer_fn(function()
-    local current_diff_data = active_diffs[tab_name]
-    local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
-    M.reload_file_buffers_manual(diff_data.old_file_path, original_cursor_pos)
-    
-    -- Trigger follow_file_changes navigation if enabled
-    local main_module = require("claudecode")
-    if main_module.state.config and main_module.state.config.follow_file_changes then
-      -- Use the cursor position from the diff view, not the original position
-      M._navigate_to_file_after_change(diff_data.old_file_path, diff_cursor_pos or original_cursor_pos)
-    end
-  end, 200)
+  -- Trigger follow_file_changes navigation immediately
+  local current_diff_data = active_diffs[tab_name]
+  local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
+  local follow_file_changes = require("claudecode.follow_file_changes")
+  
+  -- Use immediate navigation (no delay)
+  follow_file_changes.handle_file_change(diff_data.old_file_path, diff_cursor_pos or original_cursor_pos, original_cursor_pos)
 
   -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
   logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
 end
 
---- Reload file buffers after external changes (called when diff is closed)
--- @param file_path string Path to the file that was externally modified
--- @param original_cursor_pos table|nil Original cursor position to restore {row, col}
-local function reload_file_buffers(file_path, original_cursor_pos)
-  logger.debug("diff", "Reloading buffers for file:", file_path, original_cursor_pos and "(restoring cursor)" or "")
-
-  local reloaded_count = 0
-  -- Find and reload any open buffers for this file
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) then
-      local buf_name = vim.api.nvim_buf_get_name(buf)
-
-      -- Simple string match - if buffer name matches the file path
-      if buf_name == file_path then
-        -- Check if buffer is modified - only reload unmodified buffers for safety
-        local modified = vim.api.nvim_buf_get_option(buf, "modified")
-        logger.debug("diff", "Found matching buffer", buf, "modified:", modified)
-
-        if not modified then
-          -- Try to find a window displaying this buffer for proper context
-          local win_id = nil
-          for _, win in ipairs(vim.api.nvim_list_wins()) do
-            if vim.api.nvim_win_get_buf(win) == buf then
-              win_id = win
-              break
-            end
-          end
-
-          if win_id then
-            vim.api.nvim_win_call(win_id, function()
-              vim.cmd("edit")
-              -- Restore original cursor position if we have it
-              if original_cursor_pos then
-                pcall(vim.api.nvim_win_set_cursor, win_id, original_cursor_pos)
-              end
-            end)
-          else
-            vim.api.nvim_buf_call(buf, function()
-              vim.cmd("edit")
-            end)
-          end
-
-          reloaded_count = reloaded_count + 1
-        end
-      end
-    end
-  end
-
-  logger.debug("diff", "Completed buffer reload - reloaded", reloaded_count, "buffers for file:", file_path)
-end
 
 --- Resolve diff as rejected (user closed/rejected)
 -- @param tab_name string The diff identifier
@@ -604,13 +549,14 @@ function M._create_diff_view_from_window(
     local new_lines = vim.api.nvim_buf_get_lines(new_buffer, 0, -1, false)
     local new_content = table.concat(new_lines, "\n")
 
-    -- Create unified diff view
+    -- Create unified diff view with config for folding
     local result = unified_diff.open_unified_diff(
       old_file_path,
       old_file_path, -- Use old_file_path for both since we want to show as editing the original
       new_content,
       tab_name,
-      target_window
+      target_window,
+      main_module.state.config -- Pass config for lines_before_fold setting
     )
 
     if result.success then
@@ -938,6 +884,23 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
   end,
 })
 
+--- Mark a diff as externally saved (called by saveDocument tool)
+-- @param file_path string Path to the file that was saved
+function M._mark_diff_as_externally_saved(file_path)
+  local follow_file_changes = require("claudecode.follow_file_changes")
+  follow_file_changes.mark_file_as_externally_saved(file_path)
+  
+  -- Find diff by file path and mark as saved
+  for tab_name, diff_data in pairs(active_diffs) do
+    if diff_data.old_file_path == file_path and diff_data.status == "pending" then
+      logger.debug("diff", "Found diff to mark as saved:", tab_name)
+      diff_data.status = "saved"
+      diff_data.externally_saved = true
+      break
+    end
+  end
+end
+
 --- Close diff by tab name (used by close_tab tool)
 -- @param tab_name string The diff identifier
 -- @return boolean success True if diff was found and closed
@@ -947,67 +910,82 @@ function M.close_diff_by_tab_name(tab_name)
     return false
   end
 
-  -- If the diff was already saved, reload file buffers and clean up
+  -- If the diff was already saved, handle file changes immediately
   if diff_data.status == "saved" then
-    -- Claude Code CLI has written the file, reload any open buffers
+    -- Claude Code CLI has written the file
     if diff_data.old_file_path then
-      -- Add a small delay to ensure Claude CLI has finished writing the file
-      vim.defer_fn(function()
-        M.reload_file_buffers_manual(diff_data.old_file_path, diff_data.original_cursor_pos)
-      end, 100) -- 100ms delay
+      local follow_file_changes = require("claudecode.follow_file_changes")
+      follow_file_changes.handle_file_change(diff_data.old_file_path, diff_data.original_cursor_pos, diff_data.original_cursor_pos)
     end
     M._cleanup_diff_state(tab_name, "diff tab closed after save")
     return true
   end
 
-  -- If still pending, treat as rejection
+  -- If still pending, check if Claude has already marked it as saved via saveDocument
   if diff_data.status == "pending" then
-    M._resolve_diff_as_rejected(tab_name)
+    local follow_file_changes = require("claudecode.follow_file_changes")
+    
+    -- Check if the diff was already marked as externally saved by saveDocument
+    if follow_file_changes.check_and_clear_external_save_flag(diff_data.old_file_path) then
+      logger.debug("diff", "Diff was already marked as externally saved - treating as accepted", diff_data.old_file_path)
+      diff_data.status = "saved"
+      
+      -- Get cursor position from diff view if available
+      local cursor_pos = diff_data.original_cursor_pos
+      if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+        cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
+      end
+      
+      -- Handle file change immediately (no delay)
+      follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos)
+      
+      M._cleanup_diff_state(tab_name, "diff tab closed after external save via saveDocument")
+      return true
+    end
+    
+    -- No external save flag set - check file modification as fallback
+    logger.debug("diff", "No external save flag set - checking file modification as fallback")
+    
+    -- Get cursor position from diff view if available
+    local cursor_pos = diff_data.original_cursor_pos
+    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+      cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
+    end
+    
+    -- Use the new follow_file_changes module for timing-based detection
+    follow_file_changes.handle_file_change_with_timing_check(
+      diff_data.old_file_path,
+      diff_data.created_at,
+      cursor_pos,
+      diff_data.original_cursor_pos,
+      function(was_modified)
+        if was_modified then
+          logger.debug("diff", "File was externally modified - treating as accepted")
+          diff_data.status = "saved"
+          M._cleanup_diff_state(tab_name, "diff tab closed after external file modification")
+        else
+          logger.debug("diff", "File not modified - treating as rejected")
+          M._resolve_diff_as_rejected(tab_name)
+        end
+      end
+    )
+    
     return true
   end
 
   return false
 end
 
---- Navigate to file after changes are applied (for follow_file_changes feature)
--- @param file_path string Path to the file to navigate to
--- @param cursor_pos table|nil Cursor position to restore {row, col}
-function M._navigate_to_file_after_change(file_path, cursor_pos)
-  logger.debug("diff", "Navigating to file after change:", file_path, cursor_pos and "with cursor position" or "")
-  
-  -- Find a suitable main editor window (not terminal or sidebar)
-  local target_win = find_main_editor_window()
-  
-  if target_win then
-    -- Switch to the target window
-    vim.api.nvim_set_current_win(target_win)
-    
-    -- Force reload the file to get latest content
-    vim.cmd("checktime " .. vim.fn.fnameescape(file_path))
-    vim.cmd("edit! " .. vim.fn.fnameescape(file_path))
-    
-    -- Restore cursor position if available
-    if cursor_pos then
-      -- Use vim.schedule to ensure the cursor is set after the file is loaded
-      vim.schedule(function()
-        pcall(vim.api.nvim_win_set_cursor, target_win, cursor_pos)
-      end)
-    end
-    
-    logger.debug("diff", "Navigated to file:", file_path)
-  else
-    logger.debug("diff", "No suitable window found for navigation")
-  end
-end
 
 -- Test helper function (only for testing)
 function M._get_active_diffs()
   return active_diffs
-end
+end -- Test navigation for fold-aware positioning
 
 -- Manual buffer reload function for testing/debugging
 function M.reload_file_buffers_manual(file_path, original_cursor_pos)
-  return reload_file_buffers(file_path, original_cursor_pos)
+  local follow_file_changes = require("claudecode.follow_file_changes")
+  return follow_file_changes.reload_file_buffers(file_path, original_cursor_pos)
 end
 
 --- Accept the current diff (user command version)
@@ -1049,6 +1027,5 @@ function M.deny_current_diff()
   M._resolve_diff_as_rejected(tab_name)
 end
 
--- This module provides native Neovim diff functionality for Claude Code
--- with MCP-compliant blocking operations, state management, and follow_file_changes support
 return M
+-- Testing fold-aware navigation with configurable lines_before_fold
