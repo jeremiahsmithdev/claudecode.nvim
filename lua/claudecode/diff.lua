@@ -3,26 +3,21 @@
 local M = {}
 
 local logger = require("claudecode.logger")
-local utils = require("claudecode.utils")
-local window_utils = require("claudecode.utils.window")
 
--- Global state management for active diffs
-local active_diffs = {}
-local autocmd_group
+-- Import modular components
+local core = require("claudecode.diff.core")
+local modes = require("claudecode.diff.modes")
+local buffers = require("claudecode.diff.buffers")
+local navigation = require("claudecode.diff.navigation")
+local blocking = require("claudecode.diff.blocking")
 
---- Get or create the autocmd group
-local function get_autocmd_group()
-  if not autocmd_group then
-    autocmd_group = vim.api.nvim_create_augroup("ClaudeCodeMCPDiff", { clear = true })
-  end
-  return autocmd_group
-end
+-- Access to active diffs table from core module
+local active_diffs = core.get_active_diffs_table()
 
 --- Setup the diff module
 -- @param user_diff_config table|nil Reserved for future use
 function M.setup(user_diff_config)
-  -- Currently no configuration needed for native diff
-  -- Parameter kept for API compatibility
+  core.setup(user_diff_config)
 end
 
 --- Open a diff view between two files
@@ -32,76 +27,17 @@ end
 -- @param tab_name string Name for the diff tab/view
 -- @return table Result with provider, tab_name, and success status
 function M.open_diff(old_file_path, new_file_path, new_file_contents, tab_name)
-  return M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  return modes.open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
 end
 
---- Open diff using native Neovim functionality
+--- Open diff using native Neovim functionality (kept for backward compatibility)
 -- @param old_file_path string Path to the original file
 -- @param new_file_path string Path to the new file (used for naming)
 -- @param new_file_contents string Contents of the new file
 -- @param tab_name string Name for the diff tab/view
 -- @return table Result with provider, tab_name, and success status
 function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
-  -- Note: unified mode is handled in _create_diff_view_from_window
-  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
-  local tmp_file, err = utils.create_temp_file(new_file_contents, new_filename)
-  if not tmp_file then
-    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
-  end
-
-  local target_win = window_utils.find_main_editor_window()
-
-  if target_win then
-    vim.api.nvim_set_current_win(target_win)
-  else
-    vim.cmd("wincmd t")
-    vim.cmd("wincmd l")
-    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-
-    if buftype == "terminal" or buftype == "nofile" then
-      vim.cmd("vsplit")
-    end
-  end
-
-  vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  vim.cmd("diffthis")
-  vim.cmd("vsplit")
-  vim.cmd("edit " .. vim.fn.fnameescape(tmp_file))
-  vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
-
-  -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
-  local proposed_buf = vim.api.nvim_get_current_buf()
-  local old_filetype = utils.detect_filetype(old_file_path)
-  if old_filetype and old_filetype ~= "" then
-    vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })
-  end
-
-  vim.cmd("wincmd =")
-
-  local new_buf = proposed_buf
-  vim.api.nvim_set_option_value("buftype", "nofile", { buf = new_buf })
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = new_buf })
-  vim.api.nvim_set_option_value("swapfile", false, { buf = new_buf })
-
-  vim.cmd("diffthis")
-
-  local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
-  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
-    group = cleanup_group,
-    buffer = new_buf,
-    callback = function()
-      utils.cleanup_temp_file(tmp_file)
-    end,
-    once = true,
-  })
-
-  return {
-    provider = "native",
-    tab_name = tab_name,
-    success = true,
-    temp_file = tmp_file,
-  }
+  return modes.open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
 end
 
 --- Register diff state for tracking
@@ -218,56 +154,13 @@ end
 -- @param new_buffer number New file buffer ID
 -- @return table List of autocmd IDs
 local function register_diff_autocmds(tab_name, new_buffer)
-  local autocmd_ids = {}
-
-  -- Handle :w command to accept diff changes (replaces both BufWritePost and BufWriteCmd)
-  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufWriteCmd", {
-    group = get_autocmd_group(),
-    buffer = new_buffer,
-    callback = function()
-      logger.debug("diff", "BufWriteCmd (:w) triggered - accepting diff changes for", tab_name)
-      M._resolve_diff_as_saved(tab_name, new_buffer)
-      -- Prevent actual file write since we're handling it through MCP
-      return true
-    end,
-  })
-
-  -- Buffer deletion monitoring for rejection (multiple events to catch all deletion methods)
-
-  -- BufDelete: When buffer is deleted with :bdelete, :bwipeout, etc.
-  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufDelete", {
-    group = get_autocmd_group(),
-    buffer = new_buffer,
-    callback = function()
-      logger.debug("diff", "BufDelete triggered for new buffer", new_buffer, "tab:", tab_name)
-      M._resolve_diff_as_rejected(tab_name)
-    end,
-  })
-
-  -- BufUnload: When buffer is unloaded (covers more scenarios)
-  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufUnload", {
-    group = get_autocmd_group(),
-    buffer = new_buffer,
-    callback = function()
-      logger.debug("diff", "BufUnload triggered for new buffer", new_buffer, "tab:", tab_name)
-      M._resolve_diff_as_rejected(tab_name)
-    end,
-  })
-
-  -- BufWipeout: When buffer is wiped out completely
-  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufWipeout", {
-    group = get_autocmd_group(),
-    buffer = new_buffer,
-    callback = function()
-      logger.debug("diff", "BufWipeout triggered for new buffer", new_buffer, "tab:", tab_name)
-      M._resolve_diff_as_rejected(tab_name)
-    end,
-  })
-
-  -- Note: We intentionally do NOT monitor old_buffer for deletion
-  -- because it's the actual file buffer and shouldn't trigger diff rejection
-
-  return autocmd_ids
+  return buffers.register_diff_autocmds(
+    tab_name,
+    new_buffer,
+    core.get_autocmd_group,
+    M._resolve_diff_as_saved,
+    M._resolve_diff_as_rejected
+  )
 end
 
 --- Create diff view from a specific window
@@ -286,142 +179,14 @@ function M._create_diff_view_from_window(
   is_new_file,
   existing_buffer
 )
-  -- If no target window provided, create a new window in suitable location
-  if not target_window then
-    -- Try to create a new window in the main area
-    vim.cmd("wincmd t") -- Go to top-left
-    vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
-
-    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-    local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
-
-    if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" or filetype == "ClaudeCode" then
-      vim.cmd("vsplit")
-    end
-
-    target_window = vim.api.nvim_get_current_win()
-  else
-    vim.api.nvim_set_current_win(target_window)
-  end
-
-  local original_buffer
-  if is_new_file then
-    local empty_buffer = vim.api.nvim_create_buf(false, true)
-    if not empty_buffer or empty_buffer == 0 then
-      local error_msg = "Failed to create empty buffer for new file diff"
-      logger.error("diff", error_msg)
-      error({
-        code = -32000,
-        message = "Buffer creation failed",
-        data = error_msg,
-      })
-    end
-
-    -- Set buffer properties with error handling
-    local success, err = pcall(function()
-      vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
-      vim.api.nvim_buf_set_lines(empty_buffer, 0, -1, false, {})
-      vim.api.nvim_buf_set_option(empty_buffer, "buftype", "nofile")
-      vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
-      vim.api.nvim_buf_set_option(empty_buffer, "readonly", true)
-    end)
-
-    if not success then
-      pcall(vim.api.nvim_buf_delete, empty_buffer, { force = true })
-      local error_msg = "Failed to configure empty buffer: " .. tostring(err)
-      logger.error("diff", error_msg)
-      error({
-        code = -32000,
-        message = "Buffer configuration failed",
-        data = error_msg,
-      })
-    end
-
-    vim.api.nvim_win_set_buf(target_window, empty_buffer)
-    original_buffer = empty_buffer
-  else
-    -- Use existing buffer if available to avoid E37 error with unsaved changes
-    if existing_buffer and vim.api.nvim_buf_is_valid(existing_buffer) then
-      vim.api.nvim_win_set_buf(target_window, existing_buffer)
-      original_buffer = existing_buffer
-    else
-      vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-      original_buffer = vim.api.nvim_win_get_buf(target_window)
-    end
-  end
-
-  -- Check if we're in unified mode
-  local main_module = require("claudecode")
-  local diff_mode = main_module.state.config.diff_opts.diff_mode or "split"
-
-  if diff_mode == "unified" then
-    -- Unified mode: use dedicated unified_diff module
-    local unified_diff = require("claudecode.unified_diff")
-
-    -- Get new buffer content for unified diff
-    local new_lines = vim.api.nvim_buf_get_lines(new_buffer, 0, -1, false)
-    local new_content = table.concat(new_lines, "\n")
-
-    -- Create unified diff view with config for folding
-    local result = unified_diff.open_unified_diff(
-      old_file_path,
-      old_file_path, -- Use old_file_path for both since we want to show as editing the original
-      new_content,
-      tab_name,
-      target_window,
-      main_module.state.config, -- Pass config for lines_before_fold setting
-      is_new_file -- Pass new file information for proper buffer naming
-    )
-
-    if result.success then
-      diff_info = {
-        new_window = target_window,
-        target_window = target_window,
-        original_buffer = result.buffer,
-        new_buffer = result.buffer, -- For cleanup tracking
-      }
-    else
-      -- Fall back to split mode if unified diff fails
-      logger.warn("unified_diff", "Failed to create unified diff, falling back to split mode")
-      diff_mode = "split" -- Force split mode for fallback
-    end
-  end
-
-  -- Only run split mode if we're not in unified mode or unified mode failed
-  if diff_mode == "split" then
-    -- Split mode: original behavior
-    vim.cmd("diffthis")
-
-    vim.cmd("vsplit")
-    local new_win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(new_win, new_buffer)
-
-    -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
-    local original_ft = utils.detect_filetype(old_file_path, original_buffer)
-    if original_ft and original_ft ~= "" then
-      vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
-    end
-    vim.cmd("diffthis")
-
-    vim.cmd("wincmd =")
-    vim.api.nvim_set_current_win(new_win)
-
-    -- Store diff context in buffer variables for user commands
-    vim.b[new_buffer].claudecode_diff_tab_name = tab_name
-    vim.b[new_buffer].claudecode_diff_new_win = new_win
-    vim.b[new_buffer].claudecode_diff_target_win = target_window
-
-    -- Set diff_info for split mode
-    diff_info = {
-      new_window = new_win,
-      target_window = target_window,
-      original_buffer = original_buffer,
-      new_buffer = new_buffer, -- For cleanup tracking
-    }
-  end
-
-  return diff_info
+  return modes.create_diff_view_from_window(
+    target_window,
+    old_file_path,
+    new_buffer,
+    tab_name,
+    is_new_file,
+    existing_buffer
+  )
 end
 
 --- Clean up diff state and resources
@@ -429,191 +194,29 @@ end
 -- @param reason string Reason for cleanup
 function M._cleanup_diff_state(tab_name, reason)
   local diff_data = active_diffs[tab_name]
-  if not diff_data then
-    return
-  end
-
-  -- Clean up autocmds
-  for _, autocmd_id in ipairs(diff_data.autocmd_ids or {}) do
-    pcall(vim.api.nvim_del_autocmd, autocmd_id)
-  end
-
-  -- Clean up unified diff resources
-  if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
-    local ok, unified_diff = pcall(require, "claudecode.unified_diff")
-    if ok then
-      pcall(unified_diff.cleanup_unified_diff, diff_data.new_buffer)
-    end
-  end
-
-  -- Clean up the new buffer (proposed changes)
-  if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
-    pcall(vim.api.nvim_buf_delete, diff_data.new_buffer, { force = true })
-  end
-
-  -- For new files, also clean up the original "(NEW FILE)" buffer
-  if diff_data.is_new_file and diff_data.original_buffer and vim.api.nvim_buf_is_valid(diff_data.original_buffer) then
-    logger.debug("diff", "Cleaning up (NEW FILE) buffer for new file:", diff_data.old_file_path)
-    pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
-  end
-
-  -- Close new diff window if still open
-  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-    pcall(vim.api.nvim_win_close, diff_data.new_window, true)
-  end
-
-  -- Turn off diff mode in target window if it still exists
-  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-    vim.api.nvim_win_call(diff_data.target_window, function()
-      vim.cmd("diffoff")
-    end)
-  end
-
-  -- Remove from active diffs
-  active_diffs[tab_name] = nil
-
-  logger.debug("diff", "Cleaned up diff state for", tab_name, "due to:", reason)
+  buffers.cleanup_diff_state(tab_name, diff_data, active_diffs, reason)
 end
 
 --- Clean up all active diffs
 -- @param reason string Reason for cleanup
 -- NOTE: This will become a public closeAllDiffTabs tool in the future
 function M._cleanup_all_active_diffs(reason)
-  for tab_name, _ in pairs(active_diffs) do
-    M._cleanup_diff_state(tab_name, reason)
-  end
+  buffers.cleanup_all_active_diffs(active_diffs, M._cleanup_diff_state, reason)
 end
 
 --- Set up blocking diff operation with simpler approach
 -- @param params table Parameters for the diff
 -- @param resolution_callback function Callback to call when diff resolves
 function M._setup_blocking_diff(params, resolution_callback)
-  local tab_name = params.tab_name
-  logger.debug("diff", "Setting up diff for:", params.old_file_path)
-
-  -- Wrap the setup in error handling to ensure cleanup on failure
-  local setup_success, setup_error = pcall(function()
-    -- Step 1: Check if the file exists (allow new files)
-    local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
-    local is_new_file = not old_file_exists
-
-    -- Step 2: Find if the file is already open in a buffer (only for existing files)
-    local existing_buffer = nil
-    local target_window = nil
-
-    if old_file_exists then
-      -- Look for existing buffer with this file
-      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-          local buf_name = vim.api.nvim_buf_get_name(buf)
-          if buf_name == params.old_file_path then
-            existing_buffer = buf
-            break
-          end
-        end
-      end
-
-      -- Find window containing this buffer (if any)
-      if existing_buffer then
-        for _, win in ipairs(vim.api.nvim_list_wins()) do
-          if vim.api.nvim_win_get_buf(win) == existing_buffer then
-            target_window = win
-            break
-          end
-        end
-      end
-    end
-
-    -- If no existing buffer/window, find a suitable main editor window
-    if not target_window then
-      target_window = window_utils.find_main_editor_window()
-    end
-
-    -- Step 3: Create scratch buffer for new content
-    local new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
-    if new_buffer == 0 then
-      error({
-        code = -32000,
-        message = "Buffer creation failed",
-        data = "Could not create new content buffer",
-      })
-    end
-
-    local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
-    vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    local lines = vim.split(params.new_file_contents, "\n")
-    -- Remove trailing empty line if content ended with \n
-    if #lines > 0 and lines[#lines] == "" then
-      table.remove(lines, #lines)
-    end
-    vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
-
-    vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
-    vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
-
-    -- Step 4: Set up diff view using the target window
-    local diff_info = M._create_diff_view_from_window(
-      target_window,
-      params.old_file_path,
-      new_buffer,
-      tab_name,
-      is_new_file,
-      existing_buffer
-    )
-
-    -- Step 5: Register autocmds for user interaction monitoring
-    -- Use the actual buffer the user interacts with (important for unified mode)
-    local buffer_for_autocmds = diff_info.new_buffer or new_buffer
-    local autocmd_ids = register_diff_autocmds(tab_name, buffer_for_autocmds)
-
-    -- Clean up original scratch buffer if unified mode created a different buffer
-    if diff_info.new_buffer and diff_info.new_buffer ~= new_buffer then
-      pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
-    end
-
-    -- Step 6: Store diff state
-
-    -- Save the original cursor position before storing diff state
-    local original_cursor_pos = nil
-    if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
-      original_cursor_pos = vim.api.nvim_win_get_cursor(diff_info.target_window)
-    end
-
-    M._register_diff_state(tab_name, {
-      old_file_path = params.old_file_path,
-      new_file_path = params.new_file_path,
-      new_file_contents = params.new_file_contents,
-      new_buffer = buffer_for_autocmds,
-      new_window = diff_info.new_window,
-      target_window = diff_info.target_window,
-      original_buffer = diff_info.original_buffer,
-      original_cursor_pos = original_cursor_pos,
-      autocmd_ids = autocmd_ids,
-      created_at = vim.fn.localtime(),
-      status = "pending",
-      resolution_callback = resolution_callback,
-      result_content = nil,
-      is_new_file = is_new_file,
-    })
-  end) -- End of pcall
-
-  -- Handle setup errors
-  if not setup_success then
-    local error_msg = "Failed to setup diff operation: " .. tostring(setup_error)
-    logger.error("diff", error_msg)
-
-    -- Clean up any partial state that might have been created
-    if active_diffs[tab_name] then
-      M._cleanup_diff_state(tab_name, "setup failed")
-    end
-
-    -- Re-throw the error for MCP compliance
-    error({
-      code = -32000,
-      message = "Diff setup failed",
-      data = error_msg,
-    })
-  end
+  blocking.setup_blocking_diff(
+    params,
+    resolution_callback,
+    M._register_diff_state,
+    register_diff_autocmds,
+    M._cleanup_diff_state,
+    M._create_diff_view_from_window,
+    active_diffs
+  )
 end
 
 --- Blocking diff operation for MCP compliance
@@ -699,7 +302,7 @@ end
 
 -- Set up global autocmds for shutdown handling
 vim.api.nvim_create_autocmd("VimLeavePre", {
-  group = get_autocmd_group(),
+  group = core.get_autocmd_group(),
   callback = function()
     M._cleanup_all_active_diffs("shutdown")
   end,
@@ -726,94 +329,17 @@ end
 -- @param tab_name string The diff identifier
 -- @return boolean success True if diff was found and closed
 function M.close_diff_by_tab_name(tab_name)
-  local diff_data = active_diffs[tab_name]
-  if not diff_data then
-    return false
-  end
-
-  -- If the diff was already saved, handle file changes immediately
-  if diff_data.status == "saved" then
-    -- Claude Code CLI has written the file
-    if diff_data.old_file_path then
-      local follow_file_changes = require("claudecode.follow_file_changes")
-      follow_file_changes.handle_file_change(
-        diff_data.old_file_path,
-        diff_data.original_cursor_pos,
-        diff_data.original_cursor_pos
-      )
-    end
-    M._cleanup_diff_state(tab_name, "diff tab closed after save")
-    return true
-  end
-
-  -- If still pending, check if Claude has already marked it as saved via saveDocument
-  if diff_data.status == "pending" then
-    local follow_file_changes = require("claudecode.follow_file_changes")
-
-    -- Check if the diff was already marked as externally saved by saveDocument
-    if follow_file_changes.check_and_clear_external_save_flag(diff_data.old_file_path) then
-      logger.debug(
-        "diff",
-        "Diff was already marked as externally saved - treating as accepted",
-        diff_data.old_file_path
-      )
-      diff_data.status = "saved"
-
-      -- Get cursor position from diff view if available
-      local cursor_pos = diff_data.original_cursor_pos
-      if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-        cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
-      end
-
-      -- Handle file change immediately (no delay)
-      follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos)
-
-      M._cleanup_diff_state(tab_name, "diff tab closed after external save via saveDocument")
-      return true
-    end
-
-    -- No external save flag set - check file modification as fallback
-    logger.debug("diff", "No external save flag set - checking file modification as fallback")
-
-    -- Get cursor position from diff view if available
-    local cursor_pos = diff_data.original_cursor_pos
-    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-      cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
-    end
-
-    -- Use the new follow_file_changes module for timing-based detection
-    follow_file_changes.handle_file_change_with_timing_check(
-      diff_data.old_file_path,
-      diff_data.created_at,
-      cursor_pos,
-      diff_data.original_cursor_pos,
-      function(was_modified)
-        if was_modified then
-          logger.debug("diff", "File was externally modified - treating as accepted")
-          diff_data.status = "saved"
-          M._cleanup_diff_state(tab_name, "diff tab closed after external file modification")
-        else
-          logger.debug("diff", "File not modified - treating as rejected")
-          M._resolve_diff_as_rejected(tab_name)
-        end
-      end
-    )
-
-    return true
-  end
-
-  return false
+  return navigation.close_diff_by_tab_name(tab_name, active_diffs, M._cleanup_diff_state, M._resolve_diff_as_rejected)
 end
 
 -- Test helper function (only for testing)
 function M._get_active_diffs()
-  return active_diffs
+  return core.get_active_diffs_table()
 end -- Test navigation for fold-aware positioning
 
 -- Manual buffer reload function for testing/debugging
 function M.reload_file_buffers_manual(file_path, original_cursor_pos)
-  local follow_file_changes = require("claudecode.follow_file_changes")
-  return follow_file_changes.reload_file_buffers(file_path, original_cursor_pos)
+  return navigation.reload_file_buffers_manual(file_path, original_cursor_pos)
 end
 
 --- Accept the current diff (user command version)

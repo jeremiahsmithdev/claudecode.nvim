@@ -1,0 +1,233 @@
+--- Unified vs split mode logic for claudecode.nvim diff operations
+local M = {}
+
+local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
+local window_utils = require("claudecode.utils.window")
+
+--- Open native diff view (simple split mode implementation)
+-- @param old_file_path string Path to the original file
+-- @param new_file_path string Path to the new file (used for naming)
+-- @param new_file_contents string Contents of the new file
+-- @param tab_name string Name for the diff tab/view
+-- @return table Result with provider, tab_name, and success status
+function M.open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  -- Note: unified mode is handled in _create_diff_view_from_window
+  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
+  local tmp_file, err = utils.create_temp_file(new_file_contents, new_filename)
+  if not tmp_file then
+    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+  end
+
+  local target_win = window_utils.find_main_editor_window()
+
+  if target_win then
+    vim.api.nvim_set_current_win(target_win)
+  else
+    vim.cmd("wincmd t")
+    vim.cmd("wincmd l")
+    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+
+    if buftype == "terminal" or buftype == "nofile" then
+      vim.cmd("vsplit")
+    end
+  end
+
+  vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+  vim.cmd("diffthis")
+  vim.cmd("vsplit")
+  vim.cmd("edit " .. vim.fn.fnameescape(tmp_file))
+  vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
+
+  -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
+  local proposed_buf = vim.api.nvim_get_current_buf()
+  local old_filetype = utils.detect_filetype(old_file_path)
+  if old_filetype and old_filetype ~= "" then
+    vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })
+  end
+
+  vim.cmd("wincmd =")
+
+  local new_buf = proposed_buf
+  vim.api.nvim_set_option_value("buftype", "nofile", { buf = new_buf })
+  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = new_buf })
+  vim.api.nvim_set_option_value("swapfile", false, { buf = new_buf })
+
+  vim.cmd("diffthis")
+
+  local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+    group = cleanup_group,
+    buffer = new_buf,
+    callback = function()
+      utils.cleanup_temp_file(tmp_file)
+    end,
+    once = true,
+  })
+
+  return {
+    provider = "native",
+    tab_name = tab_name,
+    success = true,
+    temp_file = tmp_file,
+  }
+end
+
+--- Create diff view from a specific window (handles unified vs split mode)
+-- @param target_window number The window to use as base for the diff
+-- @param old_file_path string Path to the original file
+-- @param new_buffer number New file buffer ID
+-- @param tab_name string The diff identifier
+-- @param is_new_file boolean Whether this is a new file (doesn't exist yet)
+-- @param existing_buffer number|nil Existing buffer for the file (to avoid E37 error)
+-- @return table Info about the created diff layout
+function M.create_diff_view_from_window(
+  target_window,
+  old_file_path,
+  new_buffer,
+  tab_name,
+  is_new_file,
+  existing_buffer
+)
+  -- If no target window provided, create a new window in suitable location
+  if not target_window then
+    -- Try to create a new window in the main area
+    vim.cmd("wincmd t") -- Go to top-left
+    vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
+
+    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+    local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
+
+    if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" or filetype == "ClaudeCode" then
+      vim.cmd("vsplit")
+    end
+
+    target_window = vim.api.nvim_get_current_win()
+  else
+    vim.api.nvim_set_current_win(target_window)
+  end
+
+  local original_buffer
+  if is_new_file then
+    local empty_buffer = vim.api.nvim_create_buf(false, true)
+    if not empty_buffer or empty_buffer == 0 then
+      local error_msg = "Failed to create empty buffer for new file diff"
+      logger.error("diff", error_msg)
+      error({
+        code = -32000,
+        message = "Buffer creation failed",
+        data = error_msg,
+      })
+    end
+
+    -- Set buffer properties with error handling
+    local success, err = pcall(function()
+      vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
+      vim.api.nvim_buf_set_lines(empty_buffer, 0, -1, false, {})
+      vim.api.nvim_buf_set_option(empty_buffer, "buftype", "nofile")
+      vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
+      vim.api.nvim_buf_set_option(empty_buffer, "readonly", true)
+    end)
+
+    if not success then
+      pcall(vim.api.nvim_buf_delete, empty_buffer, { force = true })
+      local error_msg = "Failed to configure empty buffer: " .. tostring(err)
+      logger.error("diff", error_msg)
+      error({
+        code = -32000,
+        message = "Buffer configuration failed",
+        data = error_msg,
+      })
+    end
+
+    vim.api.nvim_win_set_buf(target_window, empty_buffer)
+    original_buffer = empty_buffer
+  else
+    -- Use existing buffer if available to avoid E37 error with unsaved changes
+    if existing_buffer and vim.api.nvim_buf_is_valid(existing_buffer) then
+      vim.api.nvim_win_set_buf(target_window, existing_buffer)
+      original_buffer = existing_buffer
+    else
+      vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+      original_buffer = vim.api.nvim_win_get_buf(target_window)
+    end
+  end
+
+  -- Check if we're in unified mode
+  local main_module = require("claudecode")
+  local diff_mode = main_module.state.config.diff_opts.diff_mode or "split"
+
+  local diff_info
+
+  if diff_mode == "unified" then
+    -- Unified mode: use dedicated unified_diff module
+    local unified_diff = require("claudecode.unified_diff")
+
+    -- Get new buffer content for unified diff
+    local new_lines = vim.api.nvim_buf_get_lines(new_buffer, 0, -1, false)
+    local new_content = table.concat(new_lines, "\n")
+
+    -- Create unified diff view with config for folding
+    local result = unified_diff.open_unified_diff(
+      old_file_path,
+      old_file_path, -- Use old_file_path for both since we want to show as editing the original
+      new_content,
+      tab_name,
+      target_window,
+      main_module.state.config, -- Pass config for lines_before_fold setting
+      is_new_file -- Pass new file information for proper buffer naming
+    )
+
+    if result.success then
+      diff_info = {
+        new_window = target_window,
+        target_window = target_window,
+        original_buffer = result.buffer,
+        new_buffer = result.buffer, -- For cleanup tracking
+      }
+    else
+      -- Fall back to split mode if unified diff fails
+      logger.warn("unified_diff", "Failed to create unified diff, falling back to split mode")
+      diff_mode = "split" -- Force split mode for fallback
+    end
+  end
+
+  -- Only run split mode if we're not in unified mode or unified mode failed
+  if diff_mode == "split" then
+    -- Split mode: original behavior
+    vim.cmd("diffthis")
+
+    vim.cmd("vsplit")
+    local new_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(new_win, new_buffer)
+
+    -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
+    local original_ft = utils.detect_filetype(old_file_path, original_buffer)
+    if original_ft and original_ft ~= "" then
+      vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
+    end
+    vim.cmd("diffthis")
+
+    vim.cmd("wincmd =")
+    vim.api.nvim_set_current_win(new_win)
+
+    -- Store diff context in buffer variables for user commands
+    vim.b[new_buffer].claudecode_diff_tab_name = tab_name
+    vim.b[new_buffer].claudecode_diff_new_win = new_win
+    vim.b[new_buffer].claudecode_diff_target_win = target_window
+
+    -- Set diff_info for split mode
+    diff_info = {
+      new_window = new_win,
+      target_window = target_window,
+      original_buffer = original_buffer,
+      new_buffer = new_buffer, -- For cleanup tracking
+    }
+  end
+
+  return diff_info
+end
+
+return M
