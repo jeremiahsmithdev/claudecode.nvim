@@ -33,6 +33,27 @@ local function handler(params)
     })
   end
 
+  -- Trigger follow_file_changes navigation if enabled
+  local main_module = require("claudecode")
+  if main_module.state.config and main_module.state.config.follow_file_changes then
+    -- Get current cursor position for preservation from the saved buffer
+    local cursor_pos = nil
+    local buffer_win = vim.fn.bufwinid(bufnr)
+    if buffer_win > 0 then
+      cursor_pos = vim.api.nvim_win_get_cursor(buffer_win)
+    end
+    
+    local logger = require("claudecode.logger")
+    logger.debug("save_document", "Triggering follow_file_changes for", params.filePath, "cursor:", cursor_pos)
+    
+    vim.schedule(function()
+      local diff = require("claudecode.diff")
+      -- Use expanded file path to ensure consistency
+      local expanded_path = vim.fn.expand(params.filePath)
+      diff._navigate_to_file_after_change(expanded_path, cursor_pos)
+    end)
+  end
+
   return { message = "File saved: " .. params.filePath }
 end
 

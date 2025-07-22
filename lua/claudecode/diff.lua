@@ -310,6 +310,13 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   logger.debug("diff", "Resolving diff as saved for", tab_name, "from buffer", buffer_id)
 
+  -- Capture current cursor position from the diff view for follow_file_changes
+  local diff_cursor_pos = nil
+  local current_win = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_is_valid(current_win) and vim.api.nvim_win_get_buf(current_win) == buffer_id then
+    diff_cursor_pos = vim.api.nvim_win_get_cursor(current_win)
+  end
+
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
   local final_content = table.concat(content_lines, "\n")
@@ -351,6 +358,13 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     local current_diff_data = active_diffs[tab_name]
     local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
     M.reload_file_buffers_manual(diff_data.old_file_path, original_cursor_pos)
+    
+    -- Trigger follow_file_changes navigation if enabled
+    local main_module = require("claudecode")
+    if main_module.state.config and main_module.state.config.follow_file_changes then
+      -- Use the cursor position from the diff view, not the original position
+      M._navigate_to_file_after_change(diff_data.old_file_path, diff_cursor_pos or original_cursor_pos)
+    end
   end, 200)
 
   -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
@@ -503,8 +517,16 @@ end
 -- @param new_buffer number New file buffer ID
 -- @param tab_name string The diff identifier
 -- @param is_new_file boolean Whether this is a new file (doesn't exist yet)
+-- @param existing_buffer number|nil Existing buffer for the file (to avoid E37 error)
 -- @return table Info about the created diff layout
-function M._create_diff_view_from_window(target_window, old_file_path, new_buffer, tab_name, is_new_file)
+function M._create_diff_view_from_window(
+  target_window,
+  old_file_path,
+  new_buffer,
+  tab_name,
+  is_new_file,
+  existing_buffer
+)
   -- If no target window provided, create a new window in suitable location
   if not target_window then
     -- Try to create a new window in the main area
@@ -560,8 +582,14 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
     vim.api.nvim_win_set_buf(target_window, empty_buffer)
     original_buffer = empty_buffer
   else
-    vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-    original_buffer = vim.api.nvim_win_get_buf(target_window)
+    -- Use existing buffer if available to avoid E37 error with unsaved changes
+    if existing_buffer and vim.api.nvim_buf_is_valid(existing_buffer) then
+      vim.api.nvim_win_set_buf(target_window, existing_buffer)
+      original_buffer = existing_buffer
+    else
+      vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+      original_buffer = vim.api.nvim_win_get_buf(target_window)
+    end
   end
 
   -- Check if we're in unified mode
@@ -757,8 +785,14 @@ function M._setup_blocking_diff(params, resolution_callback)
     vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
 
     -- Step 4: Set up diff view using the target window
-    local diff_info =
-      M._create_diff_view_from_window(target_window, params.old_file_path, new_buffer, tab_name, is_new_file)
+    local diff_info = M._create_diff_view_from_window(
+      target_window,
+      params.old_file_path,
+      new_buffer,
+      tab_name,
+      is_new_file,
+      existing_buffer
+    )
 
     -- Step 5: Register autocmds for user interaction monitoring
     -- Use the actual buffer the user interacts with (important for unified mode)
@@ -935,6 +969,37 @@ function M.close_diff_by_tab_name(tab_name)
   return false
 end
 
+--- Navigate to file after changes are applied (for follow_file_changes feature)
+-- @param file_path string Path to the file to navigate to
+-- @param cursor_pos table|nil Cursor position to restore {row, col}
+function M._navigate_to_file_after_change(file_path, cursor_pos)
+  logger.debug("diff", "Navigating to file after change:", file_path, cursor_pos and "with cursor position" or "")
+  
+  -- Find a suitable main editor window (not terminal or sidebar)
+  local target_win = find_main_editor_window()
+  
+  if target_win then
+    -- Switch to the target window
+    vim.api.nvim_set_current_win(target_win)
+    
+    -- Force reload the file to get latest content
+    vim.cmd("checktime " .. vim.fn.fnameescape(file_path))
+    vim.cmd("edit! " .. vim.fn.fnameescape(file_path))
+    
+    -- Restore cursor position if available
+    if cursor_pos then
+      -- Use vim.schedule to ensure the cursor is set after the file is loaded
+      vim.schedule(function()
+        pcall(vim.api.nvim_win_set_cursor, target_win, cursor_pos)
+      end)
+    end
+    
+    logger.debug("diff", "Navigated to file:", file_path)
+  else
+    logger.debug("diff", "No suitable window found for navigation")
+  end
+end
+
 -- Test helper function (only for testing)
 function M._get_active_diffs()
   return active_diffs
@@ -984,4 +1049,6 @@ function M.deny_current_diff()
   M._resolve_diff_as_rejected(tab_name)
 end
 
+-- This module provides native Neovim diff functionality for Claude Code
+-- with MCP-compliant blocking operations, state management, and follow_file_changes support
 return M
