@@ -162,27 +162,34 @@ function M.navigate_to_file_after_change(file_path, cursor_pos)
       local config = main_module.state and main_module.state.config
       local fold_info = calculate_fold_aware_position(cursor_pos, config)
 
-      local success, err = pcall(vim.api.nvim_win_set_cursor, target_win, cursor_pos)
+      -- Detect if winbar is present and adjust cursor position
+      local winbar_offset = vim.api.nvim_win_get_option(target_win, "winbar") ~= "" and 1 or 0
+      local adjusted_cursor_pos = { cursor_pos[1] + winbar_offset, cursor_pos[2] }
+
+      logger.debug("follow_file_changes", "  Winbar offset:", winbar_offset, "original pos:", cursor_pos, "adjusted pos:", adjusted_cursor_pos)
+
+      local success, err = pcall(vim.api.nvim_win_set_cursor, target_win, adjusted_cursor_pos)
       if success then
-        logger.debug("follow_file_changes", "  Cursor set to:", cursor_pos)
+        logger.debug("follow_file_changes", "  Cursor set to:", adjusted_cursor_pos)
 
         -- Adjust view positioning to match diff view's visual positioning
         if fold_info and fold_info.visual_position then
-          local current_line = cursor_pos[1]
+          local current_line = adjusted_cursor_pos[1]
           local desired_visual_line = fold_info.visual_position
 
           -- Calculate where the top of the window should be to position
-          -- the cursor line at the desired visual position
-          local window_top_line = math.max(1, current_line - desired_visual_line + 1)
+          -- the cursor line at the desired visual position, accounting for winbar
+          local window_top_line = math.max(1, current_line - desired_visual_line + 1 - winbar_offset)
 
           -- Set the window's topline to achieve the desired visual positioning
           pcall(vim.api.nvim_win_call, target_win, function()
-            vim.fn.winrestview({ topline = window_top_line, lnum = current_line, col = cursor_pos[2] })
+            vim.fn.winrestview({ topline = window_top_line, lnum = current_line, col = adjusted_cursor_pos[2] })
           end)
 
           logger.debug("follow_file_changes", "  Applied fold-aware positioning:")
           logger.debug("follow_file_changes", "    visual_position in diff:", desired_visual_line)
           logger.debug("follow_file_changes", "    window_top_line:", window_top_line)
+          logger.debug("follow_file_changes", "    winbar_offset applied:", winbar_offset)
         end
       else
         logger.error("follow_file_changes", "  Failed to set cursor:", err)

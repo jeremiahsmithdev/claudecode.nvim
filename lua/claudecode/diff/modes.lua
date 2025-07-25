@@ -64,10 +64,17 @@ local function format_diff_winbar(changes, filename)
     changes_text = table.concat(parts, " ")
   end
 
-  -- Format: Claude Code - filename | +N -N lines to be changed (centered)
+  -- Define Claude brand colors if not already defined
+  vim.api.nvim_set_hl(0, "ClaudeOrange", { fg = "#FF6B35", bold = true })
+  vim.api.nvim_set_hl(0, "ClaudeBrand", { fg = "#E5E7EB", bold = true })
+  vim.api.nvim_set_hl(0, "ClaudeSubtle", { fg = "#6B7280" })
+  vim.api.nvim_set_hl(0, "ClaudeWinbarBg", { bg = "#1F2937" }) -- Dark gray background
+
   local basename = vim.fn.fnamemodify(filename, ":t")
-  local content = string.format("Claude Code - %s | %s lines to be changed", basename, changes_text)
-  return string.format("%%=%s%%=", content)
+  -- Format with Claude branding and colors: ✻ Claude → filename | +N -N lines to be changed
+  local content = string.format("%%#ClaudeOrange#✻%%#ClaudeWinbarBg# %%#ClaudeBrand#Claude%%#ClaudeWinbarBg# %%#ClaudeSubtle#→%%#ClaudeWinbarBg# %%#Directory#%s%%#ClaudeWinbarBg# %%#ClaudeSubtle#|%%#ClaudeWinbarBg# %s lines to be changed",
+    basename, changes_text)
+  return string.format("%%#ClaudeWinbarBg#%%=%s%%=%%*", content)
 end
 
 --- Set winbar for diff display

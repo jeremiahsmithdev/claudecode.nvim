@@ -76,6 +76,10 @@ function M.open_unified_diff(
   -- Set buffer in the target window
   vim.api.nvim_win_set_buf(target_window, buf)
 
+  -- Set absolute line numbering for unified diff view
+  vim.api.nvim_set_option_value("number", true, { win = target_window })
+  vim.api.nvim_set_option_value("relativenumber", false, { win = target_window })
+
   -- Detect and set filetype
   local extension = old_file_path:match("%.([^%.]+)$")
   if extension then
@@ -105,6 +109,50 @@ function M.open_unified_diff(
     hunks = parser.parse_unified_diff(diff_output)
     change_lines = renderer.apply_unified_diff_highlighting(buf, hunks)
   end
+
+  -- Set up GitHub-style winbar with Claude branding for unified diff
+  local function set_unified_diff_winbar(win, diff_hunks, filename)
+    if not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+
+    -- Define Claude brand colors
+    vim.api.nvim_set_hl(0, "ClaudeOrange", { fg = "#FF6B35", bold = true })
+    vim.api.nvim_set_hl(0, "ClaudeBrand", { fg = "#E5E7EB", bold = true })
+    vim.api.nvim_set_hl(0, "ClaudeSubtle", { fg = "#6B7280" })
+    vim.api.nvim_set_hl(0, "ClaudeWinbarBg", { bg = "#1F2937" })
+
+    -- Count changes from hunks
+    local changes = parser.count_diff_changes(diff_hunks)
+    local parts = {}
+
+    if changes.additions > 0 then
+      table.insert(parts, string.format("%%#DiffAdd#+%d%%*", changes.additions))
+    end
+
+    if changes.deletions > 0 then
+      table.insert(parts, string.format("%%#DiffDelete#-%d%%*", changes.deletions))
+    end
+
+    local changes_text
+    if #parts == 0 then
+      changes_text = "No changes"
+    else
+      changes_text = table.concat(parts, " ")
+    end
+
+    local basename = vim.fn.fnamemodify(filename, ":t")
+
+    -- Format with Claude branding: ✻ Claude → filename | +N -N lines to be changed
+    local content = string.format("%%#ClaudeOrange#✻%%#ClaudeWinbarBg# %%#ClaudeBrand#Claude%%#ClaudeWinbarBg# %%#ClaudeSubtle#→%%#ClaudeWinbarBg# %%#Directory#%s%%#ClaudeWinbarBg# %%#ClaudeSubtle#|%%#ClaudeWinbarBg# %s lines to be changed",
+      basename, changes_text)
+    local winbar_content = string.format("%%#ClaudeWinbarBg#%%=%s%%=%%*", content)
+
+    vim.api.nvim_set_option_value("winbar", winbar_content, { win = win })
+  end
+
+  -- Apply winbar to unified diff
+  set_unified_diff_winbar(target_window, hunks, old_file_path)
 
   -- Set up folding if configured and there are changes
   if config and config.diff_opts and config.diff_opts.enable_folding and #change_lines > 0 then
