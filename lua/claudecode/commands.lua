@@ -70,6 +70,22 @@ function M.setup()
     local success, error_msg = init.send_at_mention(file_path, start_line - 1, end_line - 1, "visual selection")
     if not success then
       logger.error("command", "Failed to send selection: " .. (error_msg or "unknown error"))
+    else
+      -- Auto-navigate to tmux pane after successful send
+      local state_module = require("claudecode.state")
+      local terminal_config = state_module.state.config and state_module.state.config.terminal
+      if terminal_config and terminal_config.provider == "tmux" then
+        -- Get the tmux provider to check for active pane
+        local tmux_provider = require("claudecode.terminal.tmux")
+        if tmux_provider and tmux_provider.get_active_pane_id then
+          local pane_id = tmux_provider.get_active_pane_id()
+          if pane_id then
+            -- Automatically switch to tmux pane
+            vim.fn.system("tmux select-pane -t " .. pane_id)
+            logger.debug("command", "Auto-navigated to tmux pane:", pane_id)
+          end
+        end
+      end
     end
   end
 

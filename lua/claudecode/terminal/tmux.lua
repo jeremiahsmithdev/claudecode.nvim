@@ -203,6 +203,10 @@ function M.is_available()
   return is_in_tmux()
 end
 
+function M.get_active_pane_id()
+  return get_active_pane_id()
+end
+
 function M._get_terminal_for_test()
   return {
     pane_id = active_pane_id,
