@@ -110,7 +110,8 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   follow_file_changes.handle_file_change(
     diff_data.old_file_path,
     diff_cursor_pos or original_cursor_pos,
-    original_cursor_pos
+    original_cursor_pos,
+    diff_data.changed_lines
   )
 
   -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls

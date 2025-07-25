@@ -127,6 +127,7 @@ function M.setup_blocking_diff(
       resolution_callback = resolution_callback,
       result_content = nil,
       is_new_file = is_new_file,
+      changed_lines = diff_info.changed_lines, -- Store changed lines for 3-second highlighting
     })
   end) -- End of pcall
 

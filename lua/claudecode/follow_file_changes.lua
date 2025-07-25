@@ -94,13 +94,62 @@ local function calculate_fold_aware_position(cursor_pos, config)
   }
 end
 
+--- Highlight the specific changed/added lines from diff data
+--- @param bufnr number Buffer number
+--- @param file_path string Path to the file
+--- @param changed_lines table|nil Array of line numbers that were changed in the diff
+local function highlight_changed_lines_from_diff(bufnr, file_path, changed_lines)
+  logger.debug("follow_file_changes", "=== HIGHLIGHTING: Highlighting changed lines for", file_path, "===")
+
+  if not bufnr or bufnr == -1 then
+    logger.debug("follow_file_changes", "Invalid buffer, skipping highlighting")
+    return
+  end
+
+  -- Use the changed lines passed as parameter
+  changed_lines = changed_lines or {}
+  logger.debug("follow_file_changes", "Using", #changed_lines, "changed lines for highlighting:", vim.inspect(changed_lines))
+
+  if #changed_lines == 0 then
+    logger.debug("follow_file_changes", "No changed lines found for highlighting")
+    return
+  end
+
+  logger.debug("follow_file_changes", "Highlighting changed lines:", vim.inspect(changed_lines))
+
+  -- Create namespace for our highlights
+  local ns_id = vim.api.nvim_create_namespace("claude_code_changed_lines")
+  -- Clear any existing highlights in this namespace
+  vim.api.nvim_buf_clear_namespace(bufnr, ns_id, 0, -1)
+
+  -- Add visual-style highlighting to the changed lines
+  for _, line_nr in ipairs(changed_lines) do
+    if line_nr > 0 and line_nr <= vim.api.nvim_buf_line_count(bufnr) then
+      vim.api.nvim_buf_add_highlight(bufnr, ns_id, "Visual", line_nr - 1, 0, -1)
+      logger.debug("follow_file_changes", "Highlighted line:", line_nr)
+    end
+  end
+
+  logger.debug("follow_file_changes", "Applied highlights to", #changed_lines, "lines, will remove after 3 seconds")
+
+  -- Remove highlights after 3 seconds
+  vim.defer_fn(function()
+    if vim.api.nvim_buf_is_valid(bufnr) then
+      vim.api.nvim_buf_clear_namespace(bufnr, ns_id, 0, -1)
+      logger.debug("follow_file_changes", "Cleared change highlights from buffer", bufnr)
+    end
+  end, 3000)
+end
+
 --- Navigate to file after changes are applied (instant navigation)
 -- @param file_path string Path to the file to navigate to
 -- @param cursor_pos table|nil Cursor position to restore {row, col}
-function M.navigate_to_file_after_change(file_path, cursor_pos)
+-- @param changed_lines table|nil Array of line numbers that were changed in the diff
+function M.navigate_to_file_after_change(file_path, cursor_pos, changed_lines)
   logger.debug("follow_file_changes", "navigate_to_file_after_change called")
   logger.debug("follow_file_changes", "  file_path:", file_path)
   logger.debug("follow_file_changes", "  cursor_pos:", cursor_pos and vim.inspect(cursor_pos) or "nil")
+  logger.debug("follow_file_changes", "  changed_lines:", changed_lines and #changed_lines or 0)
 
   -- Find a suitable main editor window (not terminal or sidebar)
   local target_win = window_utils.find_main_editor_window()
@@ -203,6 +252,12 @@ function M.navigate_to_file_after_change(file_path, cursor_pos)
     end
 
     logger.debug("follow_file_changes", "Navigation completed for:", file_path)
+
+    -- Highlight the changed lines from the diff for 3 seconds
+    local final_bufnr = vim.fn.bufnr(file_path)
+    if final_bufnr ~= -1 then
+      highlight_changed_lines_from_diff(final_bufnr, file_path, changed_lines)
+    end
   else
     logger.debug("follow_file_changes", "No suitable window found for navigation")
   end
@@ -246,18 +301,19 @@ end
 -- @param file_path string Path to the file that changed
 -- @param cursor_pos table|nil Cursor position to restore {row, col}
 -- @param original_cursor_pos table|nil Fallback cursor position
-function M.handle_file_change(file_path, cursor_pos, original_cursor_pos)
+-- @param changed_lines table|nil Array of line numbers that were changed in the diff
+function M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines)
   -- Check if follow_file_changes is enabled
   local main_module = require("claudecode")
   if not (main_module.state.config and main_module.state.config.follow_file_changes) then
     return
   end
 
-  logger.debug("follow_file_changes", "Handling file change for:", file_path)
+  logger.debug("follow_file_changes", "Handling file change for:", file_path, "with", changed_lines and #changed_lines or 0, "changed lines")
 
   -- Use immediate navigation (no delay)
   M.reload_file_buffers(file_path, original_cursor_pos)
-  M.navigate_to_file_after_change(file_path, cursor_pos or original_cursor_pos)
+  M.navigate_to_file_after_change(file_path, cursor_pos or original_cursor_pos, changed_lines)
 end
 
 --- Handle file change with delayed re-check for timing-based detection
@@ -266,7 +322,8 @@ end
 -- @param cursor_pos table|nil Cursor position to restore
 -- @param original_cursor_pos table|nil Fallback cursor position
 -- @param callback function Callback to call when done (for cleanup)
-function M.handle_file_change_with_timing_check(file_path, created_at, cursor_pos, original_cursor_pos, callback)
+-- @param changed_lines table|nil Array of line numbers that were changed in the diff
+function M.handle_file_change_with_timing_check(file_path, created_at, cursor_pos, original_cursor_pos, callback, changed_lines)
   logger.debug("follow_file_changes", "Starting timing-based file change detection for:", file_path)
 
   -- First immediate check
@@ -276,7 +333,7 @@ function M.handle_file_change_with_timing_check(file_path, created_at, cursor_po
     if callback then
       callback(true)
     end
-    M.handle_file_change(file_path, cursor_pos, original_cursor_pos)
+    M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines)
     return
   end
 
@@ -289,7 +346,7 @@ function M.handle_file_change_with_timing_check(file_path, created_at, cursor_po
       if callback then
         callback(true)
       end
-      M.handle_file_change(file_path, cursor_pos, original_cursor_pos)
+      M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines)
     else
       logger.debug("follow_file_changes", "File still not modified after delay")
       if callback then

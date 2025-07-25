@@ -41,7 +41,8 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
       follow_file_changes.handle_file_change(
         diff_data.old_file_path,
         diff_data.original_cursor_pos,
-        diff_data.original_cursor_pos
+        diff_data.original_cursor_pos,
+        diff_data.changed_lines
       )
     end
     cleanup_diff_state(tab_name, "diff tab closed after save")
@@ -68,7 +69,7 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
       end
 
       -- Handle file change immediately (no delay)
-      follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos)
+      follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos, diff_data.changed_lines)
 
       cleanup_diff_state(tab_name, "diff tab closed after external save via saveDocument")
       return true
@@ -98,7 +99,8 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
           logger.debug("diff", "File not modified - treating as rejected")
           resolve_rejected(tab_name)
         end
-      end
+      end,
+      diff_data.changed_lines
     )
 
     return true
