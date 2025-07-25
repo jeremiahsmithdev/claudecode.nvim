@@ -226,6 +226,34 @@ function M.close_client(client, code, reason)
   client.state = "closing"
 end
 
+---@brief Close a client connection immediately (for shutdown)
+---@param client WebSocketClient The client object
+---@param code number|nil Close code (default: 1000)
+---@param reason string|nil Close reason
+function M.close_client_immediate(client, code, reason)
+  if client.state == "closed" then
+    return
+  end
+
+  code = code or 1000
+  reason = reason or ""
+
+  client.state = "closed"
+  
+  if client.handshake_complete then
+    local close_frame = frame.create_close_frame(code, reason)
+    -- Write synchronously without callback for immediate closure
+    pcall(function()
+      client.tcp_handle:write(close_frame)
+    end)
+  end
+  
+  -- Close immediately
+  pcall(function()
+    client.tcp_handle:close()
+  end)
+end
+
 ---@brief Check if a client connection is alive
 ---@param client WebSocketClient The client object
 ---@param timeout number Timeout in milliseconds (default: 30000)

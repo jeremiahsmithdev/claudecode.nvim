@@ -38,10 +38,10 @@ function M.setup(plugin_config)
   log_file_path = vim.fn.stdpath("cache") .. "/claudecode.log"
   log_to_file = true
 
-  -- Clear log file on setup
-  local file = io.open(log_file_path, "w")
+  -- Append to log file on setup (don't truncate)
+  local file = io.open(log_file_path, "a")
   if file then
-    file:write("=== ClaudeCode Log Started at " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n")
+    file:write("\n=== ClaudeCode Log Started at " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n")
     file:close()
   end
 end

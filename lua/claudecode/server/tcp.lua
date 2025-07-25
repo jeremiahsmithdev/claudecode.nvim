@@ -223,18 +223,38 @@ end
 
 ---@brief Stop the TCP server
 ---@param server TCPServer The server object
-function M.stop_server(server)
+---@param immediate boolean|nil If true, close connections immediately
+function M.stop_server(server, immediate)
   -- Close all clients
-  for _, client in pairs(server.clients) do
-    client_manager.close_client(client, 1001, "Server shutting down")
-  end
-
-  -- Clear clients
-  server.clients = {}
-
-  -- Close server
-  if server.server and not server.server:is_closing() then
-    server.server:close()
+  if immediate then
+    -- Immediate closure for shutdown
+    for _, client in pairs(server.clients) do
+      client_manager.close_client_immediate(client, 1000, "Server shutting down")
+    end
+    
+    -- Clear clients immediately
+    server.clients = {}
+    
+    -- Close server immediately
+    if server.server and not server.server:is_closing() then
+      server.server:close()
+    end
+  else
+    -- Normal closure with delay
+    for _, client in pairs(server.clients) do
+      client_manager.close_client(client, 1000, "Server shutting down")
+    end
+    
+    -- Add 150ms delay before clearing to allow graceful disconnect
+    vim.defer_fn(function()
+      -- Clear clients
+      server.clients = {}
+      
+      -- Close server
+      if server.server and not server.server:is_closing() then
+        server.server:close()
+      end
+    end, 150)
   end
 end
 

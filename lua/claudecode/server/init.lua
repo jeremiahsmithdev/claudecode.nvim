@@ -101,9 +101,10 @@ function M.start(config, auth_token)
 end
 
 ---@brief Stop the WebSocket server
+---@param immediate boolean|nil If true, close connections immediately without delay
 ---@return boolean success Whether server stopped successfully
 ---@return string|nil error_message Error message if any
-function M.stop()
+function M.stop(immediate)
   if not M.state.server then
     return false, "Server not running"
   end
@@ -114,7 +115,7 @@ function M.stop()
     M.state.ping_timer = nil
   end
 
-  tcp_server.stop_server(M.state.server)
+  tcp_server.stop_server(M.state.server, immediate)
 
   -- CRITICAL: Clear global deferred responses to prevent memory leaks and hanging
   if _G.claude_deferred_responses then
