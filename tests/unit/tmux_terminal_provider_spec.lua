@@ -7,12 +7,13 @@ describe("Tmux Terminal Provider", function()
   local logger_debug_spy, logger_error_spy, logger_warn_spy
 
   local function setup_mocks()
-    -- Mock vim global
-    mock_vim = {
+    -- Get the comprehensive vim mock and extend it
+    local full_vim_mock = require("tests.mocks.vim")
+    mock_vim = vim.tbl_deep_extend("force", full_vim_mock, {
       notify = spy.new(function() end),
       log = { levels = { WARN = 2, ERROR = 1, INFO = 3, DEBUG = 4 } },
       env = { TMUX = "/private/tmp/tmux-501/default,97181,8" },
-      fn = {
+      fn = vim.tbl_deep_extend("force", full_vim_mock.fn or {}, {
         system = spy.new(function(cmd)
           if cmd:match("tmux display%-message %-p") then
             return "100"
@@ -23,8 +24,8 @@ describe("Tmux Terminal Provider", function()
           end
           return ""
         end),
-      },
-    }
+      }),
+    })
     _G.vim = mock_vim
 
     -- Mock io.popen

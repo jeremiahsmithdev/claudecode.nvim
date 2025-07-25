@@ -1,3 +1,10 @@
+require("tests.busted_setup")
+
+-- Lua version compatibility - ensure unpack is available
+if not _G.unpack then
+  _G.unpack = table.unpack
+end
+
 describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
   local terminal_wrapper
   local spy
@@ -65,7 +72,9 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
   end
 
   before_each(function()
-    _G.vim = require("tests.mocks.vim")
+    -- Get the comprehensive vim mock and set it up
+    local full_vim_mock = require("tests.mocks.vim")
+    _G.vim = full_vim_mock
 
     local spy_instance_methods = {}
     local spy_instance_mt = { __index = spy_instance_methods }
@@ -308,46 +317,51 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
 
     vim.g.claudecode_user_config = {}
 
+    -- Extend vim with spy functions for testing
     local original_mock_vim_deepcopy = _G.vim.deepcopy
-    _G.vim.deepcopy = spy.new(function(tbl)
-      if original_mock_vim_deepcopy then
-        return original_mock_vim_deepcopy(tbl)
-      else
-        if type(tbl) ~= "table" then
-          return tbl
-        end
-        local status_plenary, plenary_tablex_local = pcall(require, "plenary.tablex")
-        if status_plenary and plenary_tablex_local and plenary_tablex_local.deepcopy then
-          return plenary_tablex_local.deepcopy(tbl)
-        end
-        local lookup_table_local = {}
-        local function _copy_local(object)
-          if type(object) ~= "table" then
-            return object
-          elseif lookup_table_local[object] then
-            return lookup_table_local[object]
+    _G.vim = vim.tbl_deep_extend("force", _G.vim, {
+      deepcopy = spy.new(function(tbl)
+        if original_mock_vim_deepcopy then
+          return original_mock_vim_deepcopy(tbl)
+        else
+          if type(tbl) ~= "table" then
+            return tbl
           end
-          local new_table_local = {}
-          lookup_table_local[object] = new_table_local
-          for index, value in pairs(object) do
-            new_table_local[_copy_local(index)] = _copy_local(value)
+          local status_plenary, plenary_tablex_local = pcall(require, "plenary.tablex")
+          if status_plenary and plenary_tablex_local and plenary_tablex_local.deepcopy then
+            return plenary_tablex_local.deepcopy(tbl)
           end
-          return setmetatable(new_table_local, getmetatable(object))
+          local lookup_table_local = {}
+          local function _copy_local(object)
+            if type(object) ~= "table" then
+              return object
+            elseif lookup_table_local[object] then
+              return lookup_table_local[object]
+            end
+            local new_table_local = {}
+            lookup_table_local[object] = new_table_local
+            for index, value in pairs(object) do
+              new_table_local[_copy_local(index)] = _copy_local(value)
+            end
+            return setmetatable(new_table_local, getmetatable(object))
+          end
+          return _copy_local(tbl)
         end
-        return _copy_local(tbl)
-      end
-    end)
-    vim.api.nvim_buf_get_option = spy.new(function(_bufnr, opt_name)
-      if opt_name == "buftype" then
-        return "terminal"
-      end
-      return nil
-    end)
-    vim.api.nvim_win_call = spy.new(function(_winid, func)
-      func()
-    end)
-    vim.cmd = spy.new(function(_cmd_str) end)
-    vim.notify = spy.new(function(_msg, _level) end)
+      end),
+      cmd = spy.new(function(_cmd_str) end),
+      notify = spy.new(function(_msg, _level) end),
+      api = vim.tbl_deep_extend("force", _G.vim.api or {}, {
+        nvim_buf_get_option = spy.new(function(_bufnr, opt_name)
+          if opt_name == "buftype" then
+            return "terminal"
+          end
+          return nil
+        end),
+        nvim_win_call = spy.new(function(_winid, func)
+          func()
+        end),
+      }),
+    })
 
     terminal_wrapper = require("claudecode.terminal")
     terminal_wrapper.setup({})

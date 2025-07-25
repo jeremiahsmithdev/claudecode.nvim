@@ -1,5 +1,10 @@
 -- Test setup for busted
 
+-- Lua version compatibility - ensure unpack is available
+if not _G.unpack then
+  _G.unpack = table.unpack
+end
+
 -- Create mock vim API if we're running tests outside of Neovim
 if not _G.vim then
   _G.vim = require("tests.mocks.vim")

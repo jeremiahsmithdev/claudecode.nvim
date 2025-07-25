@@ -635,6 +635,13 @@ local vim = {
     return result
   end,
 
+  trim = function(str)
+    if type(str) ~= "string" then
+      return str
+    end
+    return str:match("^%s*(.-)%s*$")
+  end,
+
   inspect = function(obj) -- Keep the mock inspect for controlled output
     if type(obj) == "string" then
       return '"' .. obj .. '"'
