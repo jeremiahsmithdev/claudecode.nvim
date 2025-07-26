@@ -73,15 +73,6 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     final_content = final_content .. "\n"
   end
 
-  -- Close diff windows (unified behavior)
-  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-    vim.api.nvim_win_close(diff_data.new_window, true)
-  end
-  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-    vim.api.nvim_set_current_win(diff_data.target_window)
-    vim.cmd("diffoff")
-  end
-
   -- Create MCP-compliant response
   local result = {
     content = {
@@ -101,21 +92,41 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     logger.debug("diff", "No resolution callback found for saved diff", tab_name)
   end
 
-  -- Trigger follow_file_changes navigation immediately
+  -- Store navigation info before closing windows
   local current_diff_data = active_diffs[tab_name]
   local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
-  local follow_file_changes = require("claudecode.follow_file_changes")
+  local target_file_path = diff_data.old_file_path
+  local changed_lines = diff_data.changed_lines
 
+  -- Close diff windows (unified behavior)
+  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+    vim.api.nvim_win_close(diff_data.new_window, true)
+  end
+  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+    vim.api.nvim_set_current_win(diff_data.target_window)
+    vim.cmd("diffoff")
+  end
+
+  -- Trigger follow_file_changes navigation after closing diff windows
+  local follow_file_changes = require("claudecode.follow_file_changes")
+  
   -- Use immediate navigation (no delay)
   follow_file_changes.handle_file_change(
-    diff_data.old_file_path,
+    target_file_path,
     diff_cursor_pos or original_cursor_pos,
     original_cursor_pos,
-    diff_data.changed_lines
+    changed_lines
   )
 
-  -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
-  logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
+  -- Handle auto-close if configured
+  local state = require("claudecode.state")
+  if state.state.config and state.state.config.diff_opts and state.state.config.diff_opts.auto_close_on_accept then
+    logger.debug("diff", "Auto-closing diff due to auto_close_on_accept setting")
+    M._cleanup_diff_state(tab_name, "auto-closed after accept")
+  else
+    -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
+    logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
+  end
 end
 
 --- Resolve diff as rejected (user closed/rejected)
@@ -308,6 +319,12 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
     M._cleanup_all_active_diffs("shutdown")
   end,
 })
+
+--- Get active diffs table (for internal use by tools)
+-- @return table The active diffs table
+function M._get_active_diffs()
+  return active_diffs
+end
 
 --- Mark a diff as externally saved (called by saveDocument tool)
 -- @param file_path string Path to the file that was saved
