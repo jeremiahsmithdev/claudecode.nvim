@@ -181,17 +181,21 @@ describe("Config module", function()
       auto_start = true,
       terminal_cmd = "toggleterm",
       log_level = "debug",
+      notify_log_level = "info",
       track_selection = false,
       visual_demotion_delay_ms = 50,
       connection_wait_delay = 200,
       connection_timeout = 10000,
       queue_timeout = 5000,
+      follow_file_changes = true,
+      tmux_cleanup_lockfiles = true,
       diff_opts = {
         auto_close_on_accept = true,
         show_diff_stats = true,
         vertical_split = true,
         open_in_current_tab = true,
         diff_mode = "split",
+        lines_before_fold = 5,
       },
     }
 

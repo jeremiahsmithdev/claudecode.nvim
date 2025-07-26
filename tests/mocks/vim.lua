@@ -376,6 +376,12 @@ local vim = {
     end,
 
     expand = function(path)
+      if not path then
+        return ""
+      end
+      if type(path) ~= "string" then
+        return tostring(path)
+      end
       return path:gsub("~", "/home/user")
     end,
 
