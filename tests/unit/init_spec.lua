@@ -40,6 +40,12 @@ describe("claudecode.init", function()
     generate_auth_token = function()
       return "mock-auth-token-12345"
     end,
+    get_lockfile_for_current_pid = function()
+      return nil, nil  -- No existing lockfile
+    end,
+    get_auth_token = function(port)
+      return true, "mock-auth-token-12345", nil
+    end,
   }
 
   local mock_selection = {
@@ -211,6 +217,8 @@ describe("claudecode.init", function()
         return mock_lockfile
       elseif mod == "claudecode.selection" then
         return mock_selection
+      elseif mod == "claudecode.server" then
+        return mock_server
       else
         return saved_require(mod)
       end
@@ -221,9 +229,74 @@ describe("claudecode.init", function()
     -- Clear cached modules before setting up mocks
     package.loaded["claudecode"] = nil
     package.loaded["claudecode.init"] = nil
-    package.loaded["claudecode.lockfile"] = nil
     package.loaded["claudecode.server"] = nil
+    package.loaded["claudecode.server.init"] = nil
+    package.loaded["claudecode.logger"] = nil
+    package.loaded["claudecode.state"] = nil
 
+    -- Mock required modules before loading claudecode
+    package.loaded["claudecode.logger"] = {
+      setup = function() end,
+      debug = function() end,
+      info = function() end,
+      warn = function() end,
+      error = function() end,
+    }
+    
+    local mock_state = {
+      config = {
+        auto_start = true,
+        terminal_cmd = "claude",
+      },
+      server = nil,
+    }
+    
+    package.loaded["claudecode.state"] = {
+      initialize = function(opts) 
+        mock_state.config = vim.tbl_deep_extend("force", mock_state.config, opts or {})
+      end,
+      set = function() end,
+      get = function() return nil end,
+      state = mock_state,
+      _clear_mention_queue = function() end,
+      reset = function() end,
+    }
+    
+    package.loaded["claudecode.terminal"] = {
+      setup = function() end,
+      toggle = function() end,
+      open = function() end,
+    }
+    
+    package.loaded["claudecode.commands"] = {
+      setup = function()
+        -- Create the commands that the tests expect
+        vim.api.nvim_create_user_command("ClaudeCode", function(opts)
+          local terminal = require("claudecode.terminal")
+          if opts.args and opts.args ~= "" then
+            terminal.toggle(nil, opts.args)
+          else
+            terminal.simple_toggle()
+          end
+        end, {
+          nargs = "*",
+          desc = "Open Claude Code with optional arguments",
+        })
+        
+        vim.api.nvim_create_user_command("ClaudeCodeOpen", function(opts)
+          local terminal = require("claudecode.terminal")
+          terminal.open(nil, opts.args)
+        end, {
+          nargs = "*",
+          desc = "Open Claude Code in a new terminal with optional arguments",
+        })
+      end,
+    }
+    
+    package.loaded["claudecode.integrations"] = {
+      setup = function() end,
+    }
+    
     -- Mock lockfile module
     package.loaded["claudecode.lockfile"] = {
       get_lockfile_for_current_pid = function()
@@ -237,6 +310,9 @@ describe("claudecode.init", function()
       end,
       get_auth_token = function(port)
         return true, "mock_token", nil
+      end,
+      remove = function(port)
+        return true
       end,
     }
   end)
