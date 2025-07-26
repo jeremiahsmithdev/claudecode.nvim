@@ -36,40 +36,18 @@ local function handler(params)
   -- Check if this save is for an active diff and resolve it properly
   local diff = require("claudecode.diff")
   local expanded_path = vim.fn.expand(params.filePath)
-  local logger = require("claudecode.logger")
-  
-  logger.debug("save_document", "=== SAVE DOCUMENT DEBUG ===")
-  logger.debug("save_document", "filePath:", params.filePath)
-  logger.debug("save_document", "expanded_path:", expanded_path)
-  logger.debug("save_document", "bufnr:", bufnr)
   
   -- Find any active diff for this file
   local diff_resolved = false
   for tab_name, diff_data in pairs(diff._get_active_diffs()) do
-    logger.debug("save_document", "Checking diff:", tab_name)
-    logger.debug("save_document", "  diff_data.status:", diff_data.status)
-    logger.debug("save_document", "  diff_data.old_file_path:", diff_data.old_file_path)
-    logger.debug("save_document", "  diff_data.new_buffer:", diff_data.new_buffer)
-    logger.debug("save_document", "  diff_data.original_buffer:", diff_data.original_buffer)
-    logger.debug("save_document", "  save buffer matches new_buffer:", diff_data.new_buffer == bufnr)
-    logger.debug("save_document", "  save buffer matches original_buffer:", diff_data.original_buffer == bufnr)
-    logger.debug("save_document", "  file path matches:", diff_data.old_file_path == expanded_path)
-    
     -- Check if this buffer is part of a pending diff
-    -- For unified mode, we need to check both the new_buffer (unified diff) and original_buffer (original file)
-    local is_diff_buffer = (diff_data.new_buffer == bufnr) or (diff_data.original_buffer == bufnr)
-    local is_same_file = diff_data.old_file_path == expanded_path
-    
-    if diff_data.status == "pending" and (is_diff_buffer or is_same_file) then
-      logger.debug("save_document", "Found matching diff - resolving as saved")
+    if diff_data.status == "pending" and diff_data.new_buffer == bufnr then
       -- Properly resolve the diff (this handles closing, navigation, and auto-close)
       diff._resolve_diff_as_saved(tab_name, bufnr)
       diff_resolved = true
       break
     end
   end
-  
-  logger.debug("save_document", "diff_resolved:", diff_resolved)
   
   -- If no diff was resolved, still mark as externally saved for other tracking
   if not diff_resolved then
@@ -81,25 +59,17 @@ local function handler(params)
   if not diff_resolved then
     local main_module = require("claudecode")
     if main_module.state.config and main_module.state.config.follow_file_changes then
-      local logger = require("claudecode.logger")
       local follow_file_changes = require("claudecode.follow_file_changes")
 
       -- Try to get cursor position from the current window (which might be the diff view)
       local current_win = vim.api.nvim_get_current_win()
-      local current_buf = vim.api.nvim_win_get_buf(current_win)
       local cursor_pos = vim.api.nvim_win_get_cursor(current_win)
-
-      logger.debug("save_document", "Current window:", current_win, "buffer:", current_buf, "cursor:", cursor_pos)
-      logger.debug("save_document", "Saved buffer:", bufnr, "file:", params.filePath)
 
       -- If we can't get a good cursor position, try from the saved buffer's window
       local buffer_win = vim.fn.bufwinid(bufnr)
       if buffer_win > 0 and buffer_win ~= current_win then
         cursor_pos = vim.api.nvim_win_get_cursor(buffer_win)
-        logger.debug("save_document", "Using cursor from buffer window:", buffer_win, "cursor:", cursor_pos)
       end
-
-      logger.debug("save_document", "Triggering follow_file_changes for", params.filePath, "final cursor:", cursor_pos)
 
       -- Use immediate navigation (no delay)
       follow_file_changes.navigate_to_file_after_change(expanded_path, cursor_pos)
