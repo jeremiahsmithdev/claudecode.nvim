@@ -269,8 +269,8 @@ function M.create_diff_view_from_window(
       diff_info = {
         new_window = target_window,
         target_window = target_window,
-        original_buffer = result.buffer,
-        new_buffer = result.buffer, -- For cleanup tracking
+        original_buffer = original_buffer, -- Keep the actual original file buffer
+        new_buffer = result.buffer, -- The unified diff buffer for cleanup tracking
         changed_lines = result.change_lines, -- Pass through changed lines for highlighting
       }
     else

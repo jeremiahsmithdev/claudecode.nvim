@@ -173,7 +173,8 @@ function M.open_unified_diff(
   -- Return result
   local result = {
     success = true,
-    bufnr = buf,
+    buffer = buf,
+    bufnr = buf, -- Keep for backward compatibility
     type = "unified",
     new_buf = buf,
     change_lines = change_lines,
