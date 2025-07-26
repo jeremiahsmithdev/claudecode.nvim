@@ -300,7 +300,7 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
     is_directory = is_directory,
   }
 
-  return server.send_message(mention_data)
+  return server.broadcast("at_mention", mention_data)
 end
 
 function M._format_path_for_at_mention(file_path)
@@ -320,6 +320,11 @@ function M._add_paths_to_claude(file_paths, options)
 
   if not M.state.server then
     logger.error(context, "Claude Code integration is not running")
+    return false
+  end
+
+  if not file_paths or type(file_paths) ~= "table" then
+    logger.error(context, "Invalid file_paths parameter: expected table")
     return false
   end
 

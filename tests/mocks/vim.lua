@@ -341,6 +341,18 @@ local vim = {
       error("Invalid window id: " .. tostring(winid))
     end,
 
+    nvim_win_set_height = function(winid, height)
+      if vim._windows[winid] then
+        vim._windows[winid].height = height
+      end
+    end,
+
+    nvim_win_set_width = function(winid, width)
+      if vim._windows[winid] then
+        vim._windows[winid].width = width
+      end
+    end,
+
     nvim_win_get_config = function(winid)
       -- Mock implementation - return empty config for non-floating windows
       if vim._windows[winid] then
@@ -456,6 +468,18 @@ local vim = {
 
     localtime = function()
       return os.time()
+    end,
+
+    isdirectory = function(path)
+      -- Simple mock - return 0 (false) for most paths
+      -- Tests can override this if needed
+      return 0
+    end,
+
+    termopen = function(cmd, opts)
+      -- Mock terminal open function
+      -- Return a mock job id
+      return 12345
     end,
   },
 
@@ -597,6 +621,26 @@ local vim = {
       if vim._buffers[bufnr] then
         vim._buffers[bufnr].b_vars = vars
       end
+    end,
+  }),
+
+  bo = setmetatable({}, {
+    __index = function(_, bufnr)
+      -- Return buffer-local options for the given buffer
+      if not vim._buffers[bufnr] then
+        vim._buffers[bufnr] = { options = {}, lines = {} }
+      end
+      if not vim._buffers[bufnr].bo_options then
+        vim._buffers[bufnr].bo_options = {}
+      end
+      return vim._buffers[bufnr].bo_options
+    end,
+    __newindex = function(_, bufnr, options)
+      -- Set buffer-local options for the given buffer
+      if not vim._buffers[bufnr] then
+        vim._buffers[bufnr] = { options = {}, lines = {} }
+      end
+      vim._buffers[bufnr].bo_options = options
     end,
   }),
 

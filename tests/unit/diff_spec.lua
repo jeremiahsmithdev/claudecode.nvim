@@ -9,9 +9,44 @@ describe("Diff Module", function()
   local function setup()
     package.loaded["claudecode.diff"] = nil
     package.loaded["claudecode.config"] = nil
+    package.loaded["claudecode.utils"] = nil
+    package.loaded["claudecode.utils.window"] = nil
+    package.loaded["claudecode.utils.file"] = nil
 
     assert(_G.vim, "Global vim mock not initialized by busted_setup.lua")
     assert(_G.vim.fn, "Global vim.fn mock not initialized")
+
+    -- Mock utilities module
+    package.loaded["claudecode.utils"] = {
+      create_temp_file = function(content, filename)
+        local tmpfile = "/tmp/test_" .. (filename or "temp")
+        return tmpfile, nil
+      end,
+      cleanup_temp_file = function(path)
+        return true
+      end,
+      detect_filetype = function(filepath)
+        if filepath:match("%.lua$") then
+          return "lua"
+        elseif filepath:match("%.py$") then
+          return "python"
+        elseif filepath:match("%.js$") then
+          return "javascript"
+        else
+          return "text"
+        end
+      end,
+    }
+
+    -- Mock window utilities module
+    package.loaded["claudecode.utils.window"] = {
+      find_main_editor_window = function()
+        return 1000
+      end,
+      is_editor_window = function()
+        return true
+      end,
+    }
 
     -- For this spec, the global mock (which now includes stdpath) should be largely sufficient.
     -- The local mock_vim that was missing stdpath is removed.

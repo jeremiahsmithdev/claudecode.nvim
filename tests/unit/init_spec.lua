@@ -217,6 +217,28 @@ describe("claudecode.init", function()
     end
 
     _G.match = match
+
+    -- Clear cached modules before setting up mocks
+    package.loaded["claudecode"] = nil
+    package.loaded["claudecode.init"] = nil
+    package.loaded["claudecode.lockfile"] = nil
+    package.loaded["claudecode.server"] = nil
+
+    -- Mock lockfile module
+    package.loaded["claudecode.lockfile"] = {
+      get_lockfile_for_current_pid = function()
+        return nil, nil  -- No existing lockfile
+      end,
+      generate_auth_token = function()
+        return "mock_auth_token"
+      end,
+      create = function(port, token)
+        return true, nil
+      end,
+      get_auth_token = function(port)
+        return true, "mock_token", nil
+      end,
+    }
   end)
 
   after_each(function()
