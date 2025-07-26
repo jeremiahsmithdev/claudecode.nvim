@@ -79,8 +79,24 @@ local function handler(params)
   return { message = "File saved: " .. params.filePath }
 end
 
+local schema = {
+  description = "Save a document by file path",
+  inputSchema = {
+    type = "object",
+    properties = {
+      filePath = {
+        type = "string",
+        description = "Path to the file to save",
+      },
+    },
+    required = { "filePath" },
+    additionalProperties = false,
+    ["$schema"] = "http://json-schema.org/draft-07/schema#",
+  },
+}
+
 return {
   name = "saveDocument",
-  schema = nil, -- Internal tool
+  schema = schema,
   handler = handler,
 }
