@@ -52,7 +52,19 @@ end
 -- @param buffer_id number The buffer that was saved
 function M._resolve_diff_as_saved(tab_name, buffer_id)
   local diff_data = active_diffs[tab_name]
+  logger.debug("diff", "=== RESOLVE DIFF AS SAVED DEBUG ===")
+  logger.debug("diff", "tab_name:", tab_name)
+  logger.debug("diff", "buffer_id:", buffer_id)
+  logger.debug("diff", "diff_data exists:", diff_data ~= nil)
+  if diff_data then
+    logger.debug("diff", "diff_data.status:", diff_data.status)
+    logger.debug("diff", "diff_data.target_window:", diff_data.target_window, "valid:", diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window))
+    logger.debug("diff", "diff_data.original_buffer:", diff_data.original_buffer, "valid:", diff_data.original_buffer and vim.api.nvim_buf_is_valid(diff_data.original_buffer))
+    logger.debug("diff", "diff_data.new_buffer:", diff_data.new_buffer, "valid:", diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer))
+  end
+  
   if not diff_data or diff_data.status ~= "pending" then
+    logger.debug("diff", "Early return - no diff_data or not pending")
     return
   end
 
@@ -98,13 +110,59 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   local target_file_path = diff_data.old_file_path
   local changed_lines = diff_data.changed_lines
 
-  -- Close diff windows (unified behavior)
-  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-    vim.api.nvim_win_close(diff_data.new_window, true)
+  -- Close diff windows/buffers based on mode
+  local state = require("claudecode.state")
+  local is_unified = state.state.config and state.state.config.diff_opts and state.state.config.diff_opts.diff_mode == "unified"
+  logger.debug("diff", "=== DIFF CLOSING DEBUG ===")
+  logger.debug("diff", "is_unified:", is_unified)
+  logger.debug("diff", "state.state.config exists:", state.state.config ~= nil)
+  if state.state.config then
+    logger.debug("diff", "state.state.config.diff_opts exists:", state.state.config.diff_opts ~= nil)
+    if state.state.config.diff_opts then
+      logger.debug("diff", "diff_mode:", state.state.config.diff_opts.diff_mode)
+      logger.debug("diff", "auto_close_on_accept:", state.state.config.diff_opts.auto_close_on_accept)
+    end
   end
-  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-    vim.api.nvim_set_current_win(diff_data.target_window)
-    vim.cmd("diffoff")
+  
+  if is_unified then
+    logger.debug("diff", "Processing unified mode diff closing")
+    -- In unified mode, we need to close the unified diff buffer and return to original file
+    if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+      logger.debug("diff", "Target window is valid")
+      -- Get the current buffer in the target window (should be the unified diff buffer)
+      local unified_buf = vim.api.nvim_win_get_buf(diff_data.target_window)
+      logger.debug("diff", "Current buffer in target window:", unified_buf)
+      
+      -- Return to the original file buffer
+      if diff_data.original_buffer and vim.api.nvim_buf_is_valid(diff_data.original_buffer) then
+        logger.debug("diff", "Setting original buffer", diff_data.original_buffer, "in target window")
+        vim.api.nvim_win_set_buf(diff_data.target_window, diff_data.original_buffer)
+        logger.debug("diff", "Successfully switched to original buffer")
+      else
+        logger.debug("diff", "Original buffer is invalid or missing")
+      end
+      
+      -- Delete the unified diff buffer
+      if unified_buf and vim.api.nvim_buf_is_valid(unified_buf) and unified_buf ~= diff_data.original_buffer then
+        logger.debug("diff", "Deleting unified diff buffer:", unified_buf)
+        local delete_success, delete_err = pcall(vim.api.nvim_buf_delete, unified_buf, { force = true })
+        logger.debug("diff", "Buffer deletion success:", delete_success, "error:", delete_err)
+      else
+        logger.debug("diff", "Unified buffer not deleted - invalid or same as original")
+      end
+    else
+      logger.debug("diff", "Target window is invalid")
+    end
+  else
+    logger.debug("diff", "Processing split mode diff closing")
+    -- Split mode - close the new window
+    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+      vim.api.nvim_win_close(diff_data.new_window, true)
+    end
+    if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+      vim.api.nvim_set_current_win(diff_data.target_window)
+      vim.cmd("diffoff")
+    end
   end
 
   -- Trigger follow_file_changes navigation after closing diff windows
@@ -118,15 +176,10 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     changed_lines
   )
 
-  -- Handle auto-close if configured
-  local state = require("claudecode.state")
-  if state.state.config and state.state.config.diff_opts and state.state.config.diff_opts.auto_close_on_accept then
-    logger.debug("diff", "Auto-closing diff due to auto_close_on_accept setting")
-    M._cleanup_diff_state(tab_name, "auto-closed after accept")
-  else
-    -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
-    logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
-  end
+  -- Always cleanup diff state when resolved through MCP (save_document tool)
+  -- The auto_close_on_accept setting only affects manual :w in Neovim
+  logger.debug("diff", "Cleaning up diff state after MCP acceptance")
+  M._cleanup_diff_state(tab_name, "resolved via MCP save")
 end
 
 --- Resolve diff as rejected (user closed/rejected)

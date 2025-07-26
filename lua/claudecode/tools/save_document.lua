@@ -36,18 +36,40 @@ local function handler(params)
   -- Check if this save is for an active diff and resolve it properly
   local diff = require("claudecode.diff")
   local expanded_path = vim.fn.expand(params.filePath)
+  local logger = require("claudecode.logger")
+  
+  logger.debug("save_document", "=== SAVE DOCUMENT DEBUG ===")
+  logger.debug("save_document", "filePath:", params.filePath)
+  logger.debug("save_document", "expanded_path:", expanded_path)
+  logger.debug("save_document", "bufnr:", bufnr)
   
   -- Find any active diff for this file
   local diff_resolved = false
   for tab_name, diff_data in pairs(diff._get_active_diffs()) do
+    logger.debug("save_document", "Checking diff:", tab_name)
+    logger.debug("save_document", "  diff_data.status:", diff_data.status)
+    logger.debug("save_document", "  diff_data.old_file_path:", diff_data.old_file_path)
+    logger.debug("save_document", "  diff_data.new_buffer:", diff_data.new_buffer)
+    logger.debug("save_document", "  diff_data.original_buffer:", diff_data.original_buffer)
+    logger.debug("save_document", "  save buffer matches new_buffer:", diff_data.new_buffer == bufnr)
+    logger.debug("save_document", "  save buffer matches original_buffer:", diff_data.original_buffer == bufnr)
+    logger.debug("save_document", "  file path matches:", diff_data.old_file_path == expanded_path)
+    
     -- Check if this buffer is part of a pending diff
-    if diff_data.status == "pending" and diff_data.new_buffer == bufnr then
+    -- For unified mode, we need to check both the new_buffer (unified diff) and original_buffer (original file)
+    local is_diff_buffer = (diff_data.new_buffer == bufnr) or (diff_data.original_buffer == bufnr)
+    local is_same_file = diff_data.old_file_path == expanded_path
+    
+    if diff_data.status == "pending" and (is_diff_buffer or is_same_file) then
+      logger.debug("save_document", "Found matching diff - resolving as saved")
       -- Properly resolve the diff (this handles closing, navigation, and auto-close)
       diff._resolve_diff_as_saved(tab_name, bufnr)
       diff_resolved = true
       break
     end
   end
+  
+  logger.debug("save_document", "diff_resolved:", diff_resolved)
   
   -- If no diff was resolved, still mark as externally saved for other tracking
   if not diff_resolved then
