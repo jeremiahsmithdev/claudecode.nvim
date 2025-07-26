@@ -93,6 +93,11 @@ if not _G.vim then
       callback()
     end,
 
+    defer_fn = function(fn, timeout)
+      -- For testing purposes, execute the deferred function immediately
+      fn()
+    end,
+
     -- Added notify and log mocks
     notify = function(_, _, _) end,
     log = {

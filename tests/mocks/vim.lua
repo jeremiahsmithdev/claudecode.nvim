@@ -530,11 +530,6 @@ local vim = {
     fn()
   end,
 
-  defer_fn = function(fn, timeout)
-    -- For tests, we'll store the deferred function to potentially call it manually
-    vim._deferred_fns = vim._deferred_fns or {}
-    table.insert(vim._deferred_fns, { fn = fn, timeout = timeout })
-  end,
 
   keymap = {
     set = function(mode, lhs, rhs, opts)
@@ -564,14 +559,6 @@ local vim = {
     },
   },
 
-  notify = function(msg, level, opts)
-    -- Store the last notification for test assertions
-    vim._last_notify = {
-      msg = msg,
-      level = level,
-      opts = opts,
-    }
-  end,
 
   g = setmetatable({}, {
     __index = function(_, key)
@@ -579,6 +566,18 @@ local vim = {
     end,
     __newindex = function(_, key, value)
       vim._vars[key] = value
+    end,
+  }),
+
+  o = setmetatable({
+    columns = 80,  -- Default terminal width for tests
+    lines = 24,    -- Default terminal height for tests
+  }, {
+    __index = function(_, key)
+      return vim._options[key]
+    end,
+    __newindex = function(_, key, value)
+      vim._options[key] = value
     end,
   }),
 
