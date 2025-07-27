@@ -36,16 +36,22 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
   -- If the diff was already saved, handle file changes immediately
   if diff_data.status == "saved" then
     -- Claude Code CLI has written the file
+    -- Clean up diff state FIRST before navigation to ensure proper window closing
+    cleanup_diff_state(tab_name, "diff tab closed after save")
+    
+    -- Then handle navigation after cleanup is complete
     if diff_data.old_file_path then
       local follow_file_changes = require("claudecode.follow_file_changes")
-      follow_file_changes.handle_file_change(
-        diff_data.old_file_path,
-        diff_data.original_cursor_pos,
-        diff_data.original_cursor_pos,
-        diff_data.changed_lines
-      )
+      vim.defer_fn(function()
+        follow_file_changes.handle_file_change(
+          diff_data.old_file_path,
+          diff_data.original_cursor_pos,
+          diff_data.original_cursor_pos,
+          diff_data.changed_lines,
+          diff_data.original_window_view
+        )
+      end, 0)
     end
-    cleanup_diff_state(tab_name, "diff tab closed after save")
     return true
   end
 
@@ -65,13 +71,21 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
       -- Get cursor position from diff view if available
       local cursor_pos = diff_data.original_cursor_pos
       if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-        cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
+        -- Always get the actual line number (not visual) to handle folds correctly
+        vim.api.nvim_win_call(diff_data.new_window, function()
+          local actual_line = vim.fn.line('.')
+          local col = vim.fn.col('.')
+          cursor_pos = {actual_line, col - 1}  -- col() is 1-based, nvim_win_set_cursor expects 0-based
+        end)
       end
 
-      -- Handle file change immediately (no delay)
-      follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos, diff_data.changed_lines)
-
+      -- Clean up diff state FIRST before navigation to ensure proper window closing
       cleanup_diff_state(tab_name, "diff tab closed after external save via saveDocument")
+      
+      -- Handle file change after cleanup (no delay needed as file is already saved)
+      vim.defer_fn(function()
+        follow_file_changes.handle_file_change(diff_data.old_file_path, cursor_pos, diff_data.original_cursor_pos, diff_data.changed_lines, diff_data.original_window_view)
+      end, 0)
       return true
     end
 
@@ -81,7 +95,12 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
     -- Get cursor position from diff view if available
     local cursor_pos = diff_data.original_cursor_pos
     if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-      cursor_pos = vim.api.nvim_win_get_cursor(diff_data.new_window)
+      -- Always get the actual line number (not visual) to handle folds correctly
+      vim.api.nvim_win_call(diff_data.new_window, function()
+        local actual_line = vim.fn.line('.')
+        local col = vim.fn.col('.')
+        cursor_pos = {actual_line, col - 1}  -- col() is 1-based, nvim_win_set_cursor expects 0-based
+      end)
     end
 
     -- Use the new follow_file_changes module for timing-based detection
@@ -100,7 +119,8 @@ function M.close_diff_by_tab_name(tab_name, active_diffs_table, cleanup_diff_sta
           resolve_rejected(tab_name)
         end
       end,
-      diff_data.changed_lines
+      diff_data.changed_lines,
+      diff_data.original_window_view
     )
 
     return true
@@ -119,3 +139,5 @@ function M.reload_file_buffers_manual(file_path, original_cursor_pos)
 end
 
 return M
+-- Test line: adding for testing diff closing with post-navigation window restoration
+-- Testing diff buffer cleanup after acceptance
