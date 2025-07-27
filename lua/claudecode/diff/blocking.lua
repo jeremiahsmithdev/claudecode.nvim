@@ -84,7 +84,29 @@ function M.setup_blocking_diff(
     vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
     vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
 
-    -- Step 4: Set up diff view using the target window
+    -- Step 4: Register initial diff state early to prevent race conditions
+    register_diff_state(tab_name, {
+      old_file_path = params.old_file_path,
+      new_file_path = params.new_file_path,
+      new_file_contents = params.new_file_contents,
+      new_buffer = new_buffer,
+      new_window = nil, -- Will be updated after diff view creation
+      target_window = target_window,
+      original_buffer = existing_buffer,
+      original_cursor_pos = target_window and vim.api.nvim_win_get_cursor(target_window) or nil,
+      original_window_view = target_window and vim.api.nvim_win_call(target_window, function()
+        return vim.fn.winsaveview()
+      end) or nil,
+      autocmd_ids = {}, -- Will be updated after autocmd registration
+      created_at = vim.fn.localtime(),
+      status = "pending",
+      resolution_callback = resolution_callback,
+      result_content = nil,
+      is_new_file = is_new_file,
+      changed_lines = {}, -- Will be updated after diff view creation
+    })
+    
+    -- Step 5: Set up diff view using the target window
     local diff_info = create_diff_view(
       target_window,
       params.old_file_path,
@@ -94,7 +116,7 @@ function M.setup_blocking_diff(
       existing_buffer
     )
 
-    -- Step 5: Register autocmds for user interaction monitoring
+    -- Step 6: Register autocmds for user interaction monitoring
     -- Use the actual buffer the user interacts with (important for unified mode)
     local buffer_for_autocmds = diff_info.new_buffer or new_buffer
     local autocmd_ids = register_autocmds(tab_name, buffer_for_autocmds)
@@ -104,31 +126,25 @@ function M.setup_blocking_diff(
       pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
     end
 
-    -- Step 6: Store diff state
-
-    -- Save the original cursor position before storing diff state
-    local original_cursor_pos = nil
-    if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
-      original_cursor_pos = vim.api.nvim_win_get_cursor(diff_info.target_window)
+    -- Step 7: Update diff state with final values from diff view creation
+    
+    -- Get the current diff state and update it with the new information
+    local current_diff_state = active_diffs_table[tab_name]
+    if current_diff_state then
+      -- Use cursor position and window view from diff view if available, otherwise keep the original
+      local original_cursor_pos = diff_info.original_cursor_pos or current_diff_state.original_cursor_pos
+      local original_window_view = diff_info.original_window_view or current_diff_state.original_window_view
+      
+      -- Update the diff state with new information from diff view creation
+      current_diff_state.new_buffer = buffer_for_autocmds
+      current_diff_state.new_window = diff_info.new_window
+      current_diff_state.target_window = diff_info.target_window
+      current_diff_state.original_buffer = diff_info.original_buffer or current_diff_state.original_buffer
+      current_diff_state.original_cursor_pos = original_cursor_pos
+      current_diff_state.original_window_view = original_window_view
+      current_diff_state.autocmd_ids = autocmd_ids
+      current_diff_state.changed_lines = diff_info.changed_lines or {}
     end
-
-    register_diff_state(tab_name, {
-      old_file_path = params.old_file_path,
-      new_file_path = params.new_file_path,
-      new_file_contents = params.new_file_contents,
-      new_buffer = buffer_for_autocmds,
-      new_window = diff_info.new_window,
-      target_window = diff_info.target_window,
-      original_buffer = diff_info.original_buffer,
-      original_cursor_pos = original_cursor_pos,
-      autocmd_ids = autocmd_ids,
-      created_at = vim.fn.localtime(),
-      status = "pending",
-      resolution_callback = resolution_callback,
-      result_content = nil,
-      is_new_file = is_new_file,
-      changed_lines = diff_info.changed_lines, -- Store changed lines for 3-second highlighting
-    })
   end) -- End of pcall
 
   -- Handle setup errors
