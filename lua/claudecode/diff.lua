@@ -107,11 +107,19 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     vim.cmd("diffoff")
   end
 
-  -- Reload the original file buffer after a delay to ensure Claude CLI has written the file
+  -- Navigate to the saved file after a delay to ensure Claude CLI has written the file
   vim.defer_fn(function()
     local current_diff_data = active_diffs[tab_name]
     local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
-    M.reload_file_buffers_manual(diff_data.old_file_path, original_cursor_pos)
+    local original_window_view = current_diff_data and current_diff_data.original_window_view
+    local follow_file_changes = require("claudecode.follow_file_changes")
+    follow_file_changes.handle_file_change(
+      diff_data.old_file_path,
+      diff_cursor_pos,
+      original_cursor_pos,
+      diff_data.changed_lines,
+      original_window_view
+    )
   end, 200)
 
   -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
@@ -389,4 +397,3 @@ function M.deny_current_diff()
 end
 
 return M
--- Testing fold-aware navigation with configurable lines_before_fold
