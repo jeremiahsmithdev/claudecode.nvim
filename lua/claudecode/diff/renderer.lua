@@ -61,6 +61,11 @@ function M.apply_unified_diff_highlighting(buf, hunks)
           attach_line = math.min(new_line_idx, buf_line_count - 1)
         end
 
+        -- Track deletion position for navigation (use attach_line for navigation)
+        if attach_line < buf_line_count then
+          table.insert(change_lines, attach_line + 1) -- 1-indexed for navigation
+        end
+
         logger.debug(
           "renderer",
           "Applying removed line virtual text at buffer line",
@@ -118,7 +123,18 @@ function M.apply_unified_diff_highlighting(buf, hunks)
     end)
   end
 
-  return change_lines
+  -- Sort and deduplicate change_lines for proper navigation order
+  local unique_lines = {}
+  local seen = {}
+  for _, line_num in ipairs(change_lines) do
+    if not seen[line_num] then
+      seen[line_num] = true
+      table.insert(unique_lines, line_num)
+    end
+  end
+  table.sort(unique_lines)
+
+  return unique_lines
 end
 
 --- Set up basic folding for unchanged sections

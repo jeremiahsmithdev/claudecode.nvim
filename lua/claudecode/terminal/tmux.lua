@@ -54,13 +54,17 @@ local function build_split_command(cmd_string, env_table, effective_config)
 end
 
 local function get_active_pane_id()
-  if not active_pane_id then
-    return nil
-  end
-
-  local handle = io.popen("tmux list-panes -F '#{pane_id}' | grep '" .. active_pane_id .. "'")
-  if not handle then
-    return nil
+  -- Check if stored pane ID is still valid
+  if active_pane_id then
+    local handle = io.popen("tmux list-panes -F '#{pane_id}' | grep '" .. active_pane_id .. "'")
+    if handle then
+      local result = handle:read("*a")
+      handle:close()
+      if result and result:gsub("%s+", "") == active_pane_id then
+        return active_pane_id
+      end
+    end
+    active_pane_id = nil
   end
 
   -- Search for node process in current window
@@ -77,8 +81,7 @@ local function get_active_pane_id()
       end
     end
   end
-
-  active_pane_id = nil
+  
   return nil
 end
 

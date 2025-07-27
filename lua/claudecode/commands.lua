@@ -37,11 +37,16 @@ function M.setup()
   })
 
   vim.api.nvim_create_user_command("ClaudeCodeStatus", function()
-    if state.state.server and state.state.port then
-      logger.info("command", "Claude Code integration is running on port " .. tostring(state.state.port))
-      local server = require("claudecode.server")
-      local status = server.get_status()
-      logger.info("command", "Server status: " .. vim.inspect(status))
+    local main_module = require("claudecode")
+    if main_module.state.server and main_module.state.port then
+      logger.info("command", "Claude Code integration is running on port " .. tostring(main_module.state.port))
+      
+      -- Also show connection status like main does
+      if main_module.is_claude_connected and main_module.is_claude_connected() then
+        logger.info("command", "Claude Code is connected")
+      else
+        logger.info("command", "Claude Code is not connected (no active clients)")
+      end
     else
       logger.info("command", "Claude Code integration is not running")
     end
@@ -53,14 +58,39 @@ function M.setup()
   local function get_visual_selection()
     local current_mode = vim.fn.mode()
     if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
-      local start_pos = vim.fn.getpos("'<")
-      local end_pos = vim.fn.getpos("'>")
+      -- Use cursor + anchor approach from main branch (more reliable)
+      local cursor_pos = vim.api.nvim_win_get_cursor(0)[1]
+      local anchor_pos = vim.fn.getpos("v")[2]
+      
+      local start_line, end_line
+      if anchor_pos > 0 then
+        start_line = math.min(cursor_pos, anchor_pos)
+        end_line = math.max(cursor_pos, anchor_pos)
+      else
+        -- Fallback: just use current cursor position
+        start_line = cursor_pos
+        end_line = cursor_pos
+      end
+      
       return {
-        start_line = start_pos[2],
-        end_line = end_pos[2],
-        start_col = start_pos[3],
-        end_col = end_pos[3],
+        start_line = start_line,
+        end_line = end_line,
+        start_col = 1,  -- Simplified for now
+        end_col = 1,    -- Simplified for now
       }
+    else
+      -- Not in visual mode, try to use the marks (they should be valid now)
+      local mark_start = vim.fn.getpos("'<")[2]
+      local mark_end = vim.fn.getpos("'>")[2]
+      
+      if mark_start > 0 and mark_end > 0 then
+        return {
+          start_line = mark_start,
+          end_line = mark_end,
+          start_col = 1,
+          end_col = 1,
+        }
+      end
     end
     return nil
   end
@@ -72,19 +102,33 @@ function M.setup()
       logger.error("command", "Failed to send selection: " .. (error_msg or "unknown error"))
     else
       -- Auto-navigate to tmux pane after successful send
-      local state_module = require("claudecode.state")
-      local terminal_config = state_module.state.config and state_module.state.config.terminal
-      if terminal_config and terminal_config.provider == "tmux" then
+      logger.info("command", "ClaudeCodeSend successful, checking tmux navigation")
+      local terminal_module = require("claudecode.terminal")
+      local is_tmux = terminal_module.is_tmux_provider()
+      logger.info("command", "is_tmux_provider():", is_tmux)
+      
+      if is_tmux then
+        logger.info("command", "Tmux mode detected, attempting navigation")
         -- Get the tmux provider to check for active pane
         local tmux_provider = require("claudecode.terminal.tmux")
         if tmux_provider and tmux_provider.get_active_pane_id then
           local pane_id = tmux_provider.get_active_pane_id()
+          logger.info("command", "Found tmux pane_id:", pane_id)
           if pane_id then
             -- Automatically switch to tmux pane
-            vim.fn.system("tmux select-pane -t " .. pane_id)
-            logger.debug("command", "Auto-navigated to tmux pane:", pane_id)
+            local cmd = "tmux select-pane -t " .. pane_id
+            logger.info("command", "Executing tmux navigation command:", cmd)
+            local result = vim.fn.system(cmd)
+            logger.info("command", "Tmux navigation result:", result)
+            logger.info("command", "Auto-navigated to tmux pane:", pane_id)
+          else
+            logger.warn("command", "No tmux pane_id found for navigation")
           end
+        else
+          logger.warn("command", "Tmux provider or get_active_pane_id function not available")
         end
+      else
+        logger.info("command", "Not in tmux mode, skipping navigation")
       end
     end
   end

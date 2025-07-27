@@ -180,11 +180,12 @@ function M.send_message(client, message, callback)
     if callback then
       callback("Client not connected")
     end
-    return
+    return false
   end
 
   local text_frame = frame.create_text_frame(message)
-  client.tcp_handle:write(text_frame, callback)
+  local write_success = client.tcp_handle:write(text_frame, callback)
+  return write_success ~= nil
 end
 
 ---@brief Send a ping to a client

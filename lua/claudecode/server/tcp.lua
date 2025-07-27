@@ -182,7 +182,7 @@ end
 ---@param server TCPServer The server object
 ---@param message string The message to broadcast
 function M.broadcast(server, message)
-  for _, client in pairs(server.clients) do
+  for client_id, client in pairs(server.clients) do
     client_manager.send_message(client, message)
   end
 end

@@ -270,8 +270,10 @@ function M.create_diff_view_from_window(
         new_window = target_window,
         target_window = target_window,
         original_buffer = original_buffer, -- Keep the actual original file buffer
-        new_buffer = result.buffer, -- The unified diff buffer for cleanup tracking
+        new_buffer = result.new_buffer, -- The unified diff buffer for cleanup tracking
         changed_lines = result.change_lines, -- Pass through changed lines for highlighting
+        original_cursor_pos = result.original_cursor_pos, -- Pass through cursor position for navigation
+        original_window_view = result.original_window_view, -- Pass through window view for topline preservation
       }
     else
       -- Fall back to split mode if unified diff fails

@@ -1,5 +1,5 @@
 ---@brief Centralized logger for Claude Code Neovim integration.
--- Provides level-based logging.
+-- Provides level-based logging in a structured JSON format for file logs.
 local M = {}
 
 M.levels = {
@@ -16,6 +16,14 @@ local level_values = {
   info = M.levels.INFO,
   debug = M.levels.DEBUG,
   trace = M.levels.TRACE,
+}
+
+local level_names = {
+  [M.levels.ERROR] = "ERROR",
+  [M.levels.WARN] = "WARN",
+  [M.levels.INFO] = "INFO",
+  [M.levels.DEBUG] = "DEBUG",
+  [M.levels.TRACE] = "TRACE",
 }
 
 local current_log_level_value = M.levels.INFO
@@ -38,10 +46,9 @@ function M.setup(plugin_config)
   log_file_path = vim.fn.stdpath("cache") .. "/claudecode.log"
   log_to_file = true
 
-  -- Append to log file on setup (don't truncate)
-  local file = io.open(log_file_path, "a")
+  -- Clear log file on setup (truncate for new session)
+  local file = io.open(log_file_path, "w")
   if file then
-    file:write("\n=== ClaudeCode Log Started at " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n")
     file:close()
   end
 end
@@ -52,19 +59,7 @@ local function log(level, component, message_parts)
     return
   end
 
-  local prefix = "[ClaudeCode]"
-  if component then
-    prefix = prefix .. " [" .. component .. "]"
-  end
-
-  local level_name = "UNKNOWN"
-  for name, val in pairs(M.levels) do
-    if val == level then
-      level_name = name
-      break
-    end
-  end
-  prefix = prefix .. " [" .. level_name .. "]"
+  local level_name = level_names[level] or "UNKNOWN"
 
   local message = ""
   for i, part in ipairs(message_parts) do
@@ -80,17 +75,44 @@ local function log(level, component, message_parts)
 
   -- Write to file if level meets file log threshold
   if log_to_file and log_file_path and level <= current_log_level_value then
-    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-    local file_message = string.format("[%s] %s %s\n", timestamp, prefix, message)
+    local source_info = {}
+    for stack_level = 2, 6 do
+      local info = debug.getinfo(stack_level, "Sl")
+      if info and info.source and info.currentline then
+        local file_path = info.source:gsub("^@", "") -- Remove @ prefix
+        if not file_path:match("/logger%.lua$") then
+          if file_path:find("/claudecode.nvim/") then
+            file_path = "./" .. file_path:match(".*/claudecode.nvim/(.*)")
+          end
+          source_info = { file = file_path, line = info.currentline }
+          break
+        end
+      end
+    end
+
+    local log_entry = {
+      level = level_name,
+      component = component,
+      source = source_info,
+      timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+      message = message,
+    }
+    local json_message = vim.json.encode(log_entry)
     local file = io.open(log_file_path, "a")
     if file then
-      file:write(file_message)
+      file:write(json_message .. "\n")
       file:close()
     end
   end
 
   -- Send notifications if level meets notify threshold
   if level <= current_notify_log_level_value then
+    local prefix = "[ClaudeCode]"
+    if component then
+      prefix = prefix .. " [" .. component .. "]"
+    end
+    prefix = prefix .. " [" .. level_name .. "]"
+
     if level == M.levels.ERROR then
       vim.schedule(function()
         vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })

@@ -76,7 +76,6 @@ local function get_provider()
   elseif config.provider == "tmux" then
     local tmux_provider = load_provider("tmux")
     if tmux_provider and tmux_provider.is_available() then
-      logger.debug("terminal", "Using tmux terminal provider")
       return tmux_provider
     else
       logger.warn("terminal", "'tmux' provider configured, but not in tmux session. Falling back to 'native'.")

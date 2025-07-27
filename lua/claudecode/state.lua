@@ -28,13 +28,23 @@ M.state = {
 --- Check if Claude Code is connected to WebSocket server
 --- @return boolean connected Whether Claude Code has active connections
 function M.is_claude_connected()
-  if not M.state.server then
+  local logger = require("claudecode.logger")
+
+  if not M.state.port then
+    logger.info("state", "is_claude_connected: No port set, returning false")
     return false
   end
 
-  local server = require("claudecode.server")
+  logger.info("state", "is_claude_connected: Port set to", M.state.port)
+
+  local server = require("claudecode.server.init")
   local status = server.get_status()
-  return status.running and status.client_count > 0
+  local is_connected = status.running and status.client_count > 0
+
+  logger.info("state", "is_claude_connected: server status", vim.inspect(status))
+  logger.info("state", "is_claude_connected: returning", is_connected)
+
+  return is_connected
 end
 
 --- Clear the @ mention queue and stop timers
@@ -92,7 +102,7 @@ function M.process_queued_mentions()
 
   for _, queued in ipairs(valid_mentions) do
     vim.schedule(function()
-      local server = require("claudecode.server")
+      local server = require("claudecode.server.init")
       local success = server.send_message(queued.data)
       if not success then
         logger.error("state", "Failed to send queued @ mention")
