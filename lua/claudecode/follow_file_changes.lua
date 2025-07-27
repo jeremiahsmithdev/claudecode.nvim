@@ -145,11 +145,13 @@ end
 -- @param file_path string Path to the file to navigate to
 -- @param cursor_pos table|nil Cursor position to restore {row, col}
 -- @param changed_lines table|nil Array of line numbers that were changed in the diff
-function M.navigate_to_file_after_change(file_path, cursor_pos, changed_lines)
+-- @param original_window_view table|nil Original window view to restore (includes topline)
+function M.navigate_to_file_after_change(file_path, cursor_pos, changed_lines, original_window_view)
   logger.debug("follow_file_changes", "navigate_to_file_after_change called")
   logger.debug("follow_file_changes", "  file_path:", file_path)
   logger.debug("follow_file_changes", "  cursor_pos:", cursor_pos and vim.inspect(cursor_pos) or "nil")
   logger.debug("follow_file_changes", "  changed_lines:", changed_lines and #changed_lines or 0)
+  logger.debug("follow_file_changes", "  original_window_view:", original_window_view and vim.inspect(original_window_view) or "nil")
 
   -- Find a suitable main editor window (not terminal or sidebar)
   local target_win = window_utils.find_main_editor_window()
@@ -211,11 +213,16 @@ function M.navigate_to_file_after_change(file_path, cursor_pos, changed_lines)
       local config = main_module.state and main_module.state.config
       local fold_info = calculate_fold_aware_position(cursor_pos, config)
 
+      -- Get buffer line count to validate cursor position
+      local buf = vim.api.nvim_win_get_buf(target_win)
+      local buf_line_count = vim.api.nvim_buf_line_count(buf)
+      
       -- Detect if winbar is present and adjust cursor position
       local winbar_offset = vim.api.nvim_win_get_option(target_win, "winbar") ~= "" and 1 or 0
-      local adjusted_cursor_pos = { cursor_pos[1] + winbar_offset, cursor_pos[2] }
+      local target_line = math.min(cursor_pos[1] + winbar_offset, buf_line_count)
+      local adjusted_cursor_pos = { target_line, cursor_pos[2] }
 
-      logger.debug("follow_file_changes", "  Winbar offset:", winbar_offset, "original pos:", cursor_pos, "adjusted pos:", adjusted_cursor_pos)
+      logger.debug("follow_file_changes", "  Buffer line count:", buf_line_count, "winbar offset:", winbar_offset, "original pos:", cursor_pos, "adjusted pos:", adjusted_cursor_pos)
 
       local success, err = pcall(vim.api.nvim_win_set_cursor, target_win, adjusted_cursor_pos)
       if success then
@@ -243,13 +250,30 @@ function M.navigate_to_file_after_change(file_path, cursor_pos, changed_lines)
       else
         logger.error("follow_file_changes", "  Failed to set cursor:", err)
       end
-
-      -- Log final state
-      local final_cursor = vim.api.nvim_win_get_cursor(target_win)
-      logger.debug("follow_file_changes", "  Final cursor position:", final_cursor)
     else
       logger.debug("follow_file_changes", "  No cursor position to restore")
     end
+
+    -- Apply original window view restoration if provided
+    if original_window_view and not cursor_pos then
+      -- Only restore window view if we didn't have a specific cursor position
+      local buf = vim.api.nvim_win_get_buf(target_win)
+      local buf_line_count = vim.api.nvim_buf_line_count(buf)
+      
+      local adjusted_view = vim.tbl_deep_copy(original_window_view)
+      adjusted_view.lnum = math.min(adjusted_view.lnum or 1, buf_line_count)
+      adjusted_view.topline = math.min(adjusted_view.topline or 1, buf_line_count)
+      
+      logger.debug("follow_file_changes", "  Restoring original window view:", vim.inspect(adjusted_view))
+      
+      pcall(vim.api.nvim_win_call, target_win, function()
+        vim.fn.winrestview(adjusted_view)
+      end)
+    end
+
+    -- Log final state
+    local final_cursor = vim.api.nvim_win_get_cursor(target_win)
+    logger.debug("follow_file_changes", "  Final cursor position:", final_cursor)
 
     logger.debug("follow_file_changes", "Navigation completed for:", file_path)
 
@@ -302,7 +326,8 @@ end
 -- @param cursor_pos table|nil Cursor position to restore {row, col}
 -- @param original_cursor_pos table|nil Fallback cursor position
 -- @param changed_lines table|nil Array of line numbers that were changed in the diff
-function M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines)
+-- @param original_window_view table|nil Original window view to restore (includes topline)
+function M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines, original_window_view)
   -- Check if follow_file_changes is enabled
   local main_module = require("claudecode")
   if not (main_module.state.config and main_module.state.config.follow_file_changes) then
@@ -313,7 +338,7 @@ function M.handle_file_change(file_path, cursor_pos, original_cursor_pos, change
 
   -- Use immediate navigation (no delay)
   M.reload_file_buffers(file_path, original_cursor_pos)
-  M.navigate_to_file_after_change(file_path, cursor_pos or original_cursor_pos, changed_lines)
+  M.navigate_to_file_after_change(file_path, cursor_pos or original_cursor_pos, changed_lines, original_window_view)
 end
 
 --- Handle file change with delayed re-check for timing-based detection
@@ -323,7 +348,8 @@ end
 -- @param original_cursor_pos table|nil Fallback cursor position
 -- @param callback function Callback to call when done (for cleanup)
 -- @param changed_lines table|nil Array of line numbers that were changed in the diff
-function M.handle_file_change_with_timing_check(file_path, created_at, cursor_pos, original_cursor_pos, callback, changed_lines)
+-- @param original_window_view table|nil Original window view to restore (includes topline)
+function M.handle_file_change_with_timing_check(file_path, created_at, cursor_pos, original_cursor_pos, callback, changed_lines, original_window_view)
   logger.debug("follow_file_changes", "Starting timing-based file change detection for:", file_path)
 
   -- First immediate check
@@ -333,7 +359,7 @@ function M.handle_file_change_with_timing_check(file_path, created_at, cursor_po
     if callback then
       callback(true)
     end
-    M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines)
+    M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines, original_window_view)
     return
   end
 
@@ -346,7 +372,7 @@ function M.handle_file_change_with_timing_check(file_path, created_at, cursor_po
       if callback then
         callback(true)
       end
-      M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines)
+      M.handle_file_change(file_path, cursor_pos, original_cursor_pos, changed_lines, original_window_view)
     else
       logger.debug("follow_file_changes", "File still not modified after delay")
       if callback then
@@ -357,3 +383,4 @@ function M.handle_file_change_with_timing_check(file_path, created_at, cursor_po
 end
 
 return M
+-- Test comment for fold-aware navigation
