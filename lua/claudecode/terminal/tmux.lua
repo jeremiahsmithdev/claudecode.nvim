@@ -63,11 +63,19 @@ local function get_active_pane_id()
     return nil
   end
 
-  local result = handle:read("*a")
-  handle:close()
-
-  if result and result:gsub("%s+", "") == active_pane_id then
-    return active_pane_id
+  -- Search for node process in current window
+  local search_handle = io.popen("tmux list-panes -F '#{pane_id}:#{pane_current_command}' | grep node")
+  if search_handle then
+    local search_result = search_handle:read("*a")
+    search_handle:close()
+    if search_result and search_result ~= "" then
+      local found_pane = search_result:match("([^:]+)")
+      if found_pane then
+        active_pane_id = found_pane:gsub("%s+", "")
+        logger.info("terminal", "Found node process in pane:", active_pane_id)
+        return active_pane_id
+      end
+    end
   end
 
   active_pane_id = nil

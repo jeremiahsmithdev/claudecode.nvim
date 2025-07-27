@@ -41,6 +41,8 @@ function M.open_unified_diff(
   local buf
   if existing_bufnr ~= -1 and vim.api.nvim_buf_is_valid(existing_bufnr) then
     buf = existing_bufnr
+    -- Set buffer to modifiable before clearing content
+    vim.api.nvim_buf_set_option(buf, "modifiable", true)
     -- Clear buffer content
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
   else
@@ -154,9 +156,26 @@ function M.open_unified_diff(
   -- Apply winbar to unified diff
   set_unified_diff_winbar(target_window, hunks, old_file_path)
 
-  -- Set up folding if configured and there are changes
-  if config and config.diff_opts and config.diff_opts.enable_folding and #change_lines > 0 then
+  -- Set up folding if configured and there are changes (including deletions)
+  if config and config.diff_opts and #hunks > 0 then
     renderer.setup_unified_diff_folding(buf, change_lines, config)
+    
+    -- Navigate to first change for better user experience
+    if #change_lines > 0 then
+      vim.api.nvim_win_set_cursor(target_window, {change_lines[1], 0})
+    end
+  end
+
+  -- Capture original cursor position and window view from target window for navigation
+  local original_cursor_pos = nil
+  local original_window_view = nil
+  if target_window and vim.api.nvim_win_is_valid(target_window) then
+    original_cursor_pos = vim.api.nvim_win_get_cursor(target_window)
+    original_window_view = vim.api.nvim_win_call(target_window, function()
+      return vim.fn.winsaveview()
+    end)
+    logger.debug("unified_diff", "Captured original cursor position:", vim.inspect(original_cursor_pos))
+    logger.debug("unified_diff", "Captured original window view:", vim.inspect(original_window_view))
   end
 
   -- Store diff metadata
@@ -168,16 +187,21 @@ function M.open_unified_diff(
     change_lines = change_lines,
     is_new_file = is_new_file,
     hunks = hunks,
+    original_cursor_pos = original_cursor_pos,
+    original_window_view = original_window_view,
   }
 
   -- Return result
   local result = {
     success = true,
-    buffer = buf,
-    bufnr = buf, -- Keep for backward compatibility
+    bufnr = buf,
     type = "unified",
     new_buf = buf,
+    new_buffer = buf, -- For compatibility with blocking mechanism
+    new_window = target_window, -- For compatibility with blocking mechanism
     change_lines = change_lines,
+    original_cursor_pos = original_cursor_pos,
+    original_window_view = original_window_view,
     stats = parser.count_diff_changes(hunks),
   }
 
